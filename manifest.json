@@ -4,8 +4,14 @@
   "version": "0.1.0",
   "description": "Sends catalogue rows from ROM-site pages you open yourself to your own ROMarr. It does not browse on its own.",
   "minimum_chrome_version": "102",
-  "permissions": ["storage", "tabs"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "host_permissions": [
     "https://vimm.net/*",
     "https://*.vimm.net/*",
@@ -40,7 +46,11 @@
         "https://cdromance.com/*",
         "https://*.cdromance.com/*"
       ],
-      "js": ["src/extract.js", "src/adapters.js", "src/content.js"],
+      "js": [
+        "src/extract.js",
+        "src/adapters.js",
+        "src/content.js"
+      ],
       "run_at": "document_idle"
     }
   ]

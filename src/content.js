@@ -41,6 +41,30 @@
     return Extract.httpsUrl(href || location.href.split("#")[0], location.href);
   }
 
+  /**
+   * The JSON of a document that IS a JSON response, or null.
+   *
+   * A browser shown `application/json` renders it as a document with the text
+   * in a <pre>; some builds wrap it in a viewer instead, so the <pre> is
+   * tried first and the body's text second. Either way this is reading the
+   * document the content script was injected into -- the same act as reading
+   * a table, and emphatically not a fetch. The operator navigated here.
+   */
+  function documentJson() {
+    const pre = document.querySelector("pre");
+    for (const text of [pre && pre.textContent, document.body && document.body.innerText]) {
+      const raw = String(text || "").trim();
+      if (!raw || (raw[0] !== "{" && raw[0] !== "[")) continue;
+      try {
+        return JSON.parse(raw);
+      } catch (_) {
+        // Fall through to the next candidate rather than reporting the page
+        // as broken: a viewer's rendering is not always valid JSON on its own.
+      }
+    }
+    return null;
+  }
+
   function harvest() {
     const adapter = Adapters.forHost(location.hostname);
     if (!adapter) return null;
@@ -50,6 +74,48 @@
     const {page, groups} = matched;
     const canonical = canonicalUrl(document);
     const base = {document, url: location.href, canonical, groups};
+
+    // A page that is a JSON document rather than markup. The rows are objects
+    // in that document, so the pickers read keys instead of selectors; every
+    // other rule -- the required fields, the urlFrom, ROMarr's validation --
+    // is unchanged, because a row is a row however it arrived.
+    if (page.kind === "json") {
+      const payload = documentJson();
+      if (payload === null) {
+        return {adapter, page: page.kind, rows: [],
+                reason: "this page is not the JSON document the adapter expects "
+                        + "-- if you are signed out it is probably an error page",
+                url: canonical, indexes: page.indexes !== false};
+      }
+      const items = Extract.jsonFiles(payload, page.collect || {});
+      const found = [];
+      for (const item of items) {
+        const ctx = Object.assign({}, base, {scope: document, item});
+        const row = Extract.record(page.fields, ctx);
+        row._href = item.path || item.url || item.href || "";
+        if (page.urlFrom) {
+          try {
+            row.url = page.urlFrom(Object.assign({}, row, item), ctx) || "";
+          } catch (_) {
+            row.url = "";
+          }
+        }
+        delete row._href;
+        if (usable(row)) found.push(row);
+      }
+      const seenJson = new Set();
+      return {adapter, page: page.kind, url: canonical,
+              indexes: page.indexes !== false,
+              reason: items.length && !found.length
+                ? "found " + items.length + " entries but none carried an id, a "
+                  + "title and a usable link -- check the popup's key names"
+                : "",
+              rows: found.filter((row) => {
+                if (seenJson.has(row.id)) return false;
+                seenJson.add(row.id);
+                return true;
+              })};
+    }
 
     // Facts a listing page states once, in a heading, rather than on every
     // row -- the system a whole page of games belongs to, most often.

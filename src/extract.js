@@ -49,16 +49,104 @@
    * Matched on the label's exact text once case and a trailing colon are
    * folded away -- not on a substring, because "Size" is inside "File Size"
    * and the two are different rows on the same page.
+   *
+   * Empty siblings are skipped, which is not a nicety. Vimm's info panel is a
+   * three-column table whose middle column is a 15px spacer:
+   * `<td>Region</td><td style="width:15px"></td><td>USA</td>`. Taking the
+   * immediate sibling returns the spacer, so every `label` rule against that
+   * page answered "" -- which looks exactly like a page that does not state
+   * the fact, and is the quietest way for an adapter to be wrong.
    */
   function labelled(scope, name) {
     const wanted = clean(name).toLowerCase().replace(/:$/, "");
     const nodes = scope.querySelectorAll("th, dt, b, strong, label, td");
     for (const node of nodes) {
       if (clean(node.textContent).toLowerCase().replace(/:$/, "") !== wanted) continue;
-      const next = node.nextElementSibling;
-      if (next) return clean(next.textContent);
+      for (let next = node.nextElementSibling; next; next = next.nextElementSibling) {
+        const value = clean(next.textContent);
+        if (value) return value;
+      }
     }
     return "";
+  }
+
+  /**
+   * Base64 in an attribute, decoded.
+   *
+   * Vimm renders both the game's name and its filename into a `<canvas>` and
+   * leaves the text only in `data-v`, base64-encoded. There is no plain-text
+   * title anywhere on a vault page -- so without this the adapter falls back
+   * to `<title>` and indexes "The Vault: Double Dragon II: The Revenge (NES)"
+   * as a game's name.
+   *
+   * Returns "" rather than throwing on anything that is not base64: a
+   * decoder that explodes on one odd page would take the whole capture with
+   * it.
+   */
+  function fromBase64(value) {
+    const raw = clean(value);
+    if (!raw || !/^[A-Za-z0-9+/=]+$/.test(raw)) return "";
+    try {
+      // decodeURIComponent/escape round-trip so a UTF-8 title survives; atob
+      // alone mangles anything outside latin-1.
+      return clean(decodeURIComponent(escape(atob(raw))));
+    } catch (_) {
+      try { return clean(atob(raw)); } catch (_e) { return ""; }
+    }
+  }
+
+  /**
+   * Every object in a JSON tree that names a file and states its size.
+   *
+   * For a site whose catalogue arrives as one JSON document rather than as
+   * markup -- The ROM Depot's `/api/getContents` is the case that needed
+   * this. The shape of that tree is the site's business and it is nested to
+   * an unknown depth, so this walks it rather than being told a path, and
+   * recognises a file by the keys it carries instead of by where it sits.
+   *
+   * Each collected object is given a `_trail`: the names of the containers it
+   * was found inside, outermost first. On a file tree that is the directory
+   * path, which is where the console name lives -- it is never on the file
+   * row itself.
+   */
+  function jsonFiles(root, options) {
+    const nameKeys = (options && options.nameKeys) || ["name", "filename", "file_name",
+                                                       "fileName", "title", "path"];
+    const sizeKeys = (options && options.sizeKeys) || ["size", "bytes", "filesize",
+                                                       "file_size", "fileSize", "length"];
+    const childKeys = (options && options.childKeys) || ["children", "contents", "items",
+                                                         "files", "nodes", "entries"];
+    const limit = (options && options.limit) || 20000;
+    const out = [];
+    const pick = (obj, keys) => {
+      for (const key of keys) {
+        if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") return obj[key];
+      }
+      return undefined;
+    };
+    const walk = (node, trail, depth) => {
+      if (out.length >= limit || depth > 24 || !node || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, trail, depth + 1);
+        return;
+      }
+      const name = pick(node, nameKeys);
+      const size = pick(node, sizeKeys);
+      const named = typeof name === "string" && name.trim() !== "";
+      const sized = typeof size === "number"
+        || (typeof size === "string" && size.trim() !== "");
+      if (named && sized) out.push(Object.assign({}, node, {_trail: trail}));
+      const next = named ? trail.concat([String(name)]) : trail;
+      // Descend through declared child keys first, then any other container,
+      // so an unexpected key name does not hide half the tree.
+      for (const key of childKeys) if (node[key]) walk(node[key], next, depth + 1);
+      for (const key of Object.keys(node)) {
+        if (childKeys.includes(key)) continue;
+        if (node[key] && typeof node[key] === "object") walk(node[key], next, depth + 1);
+      }
+    };
+    walk(root, [], 0);
+    return out;
   }
 
   /** "1.2 MB" -> bytes. Returns null rather than guessing at a unit. */
@@ -148,13 +236,55 @@
     /** A fixed value, for a page that states a fact only the adapter knows. */
     const_(ctx, value) { return clean(value); },
     /** The whole page title, last resort for a name. */
-    title(ctx) { return clean(ctx.document.title); }
+    title(ctx) { return clean(ctx.document.title); },
+    /**
+     * The first of several keys present on a JSON row -- see jsonFiles.
+     *
+     * A list rather than one name because the shape of somebody else's API
+     * is not ours to pin down: an adapter written against `size` that meets
+     * `fileSize` should read the field, not report the page as empty.
+     */
+    key(ctx, names) {
+      const item = ctx.item || {};
+      for (const name of [].concat(names)) {
+        const value = item[name];
+        if (value !== undefined && value !== null && value !== "") {
+          return typeof value === "number" ? value : clean(value);
+        }
+      }
+      return "";
+    },
+    /**
+     * A container name from a JSON row's `_trail`, counting from the
+     * outermost. `0` is the top-level folder, which on a file tree is the
+     * console. A negative index counts back from the file itself.
+     */
+    trail(ctx, index) {
+      const trail = (ctx.item && ctx.item._trail) || [];
+      const at = Number(index);
+      const value = at < 0 ? trail[trail.length + at] : trail[at];
+      return value === undefined ? "" : clean(value);
+    }
   };
 
   //: name -> how to clean a picked value up. Applied in order.
   const TRANSFORMS = {
     bytes: (value) => bytes(value),
     digits: (value) => digits(value),
+    /** Base64 out of an attribute -- see fromBase64, and Vimm's canvases. */
+    base64: (value) => fromBase64(value),
+    /** A plain integer, for a JSON field that already counts bytes. */
+    int: (value) => {
+      const n = Number(String(value).replace(/[, ]/g, ""));
+      return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+    },
+    /** Everything before the first "(" -- "NES (Get Emulator)" -> "NES". */
+    beforeParen: (value) => clean(String(value).split("(")[0]),
+    /** The contents of the first (...) -- Retrostic states its region as "(US)". */
+    inParen: (value) => {
+      const found = String(value).match(/\(([^)]*)\)/);
+      return found ? clean(found[1]) : clean(value);
+    },
     https: (value, arg, ctx) => httpsUrl(value, ctx.url),
     param: (value, name, ctx) => param(value, name, ctx.url),
     lower: (value) => clean(value).toLowerCase(),
@@ -205,6 +335,7 @@
 
   root.RomarrExtract = {
     clean, visible, labelled, bytes, param, httpsUrl, digits,
+    fromBase64, jsonFiles,
     field, record, PICKERS, TRANSFORMS
   };
 })(typeof globalThis !== "undefined" ? globalThis : self);

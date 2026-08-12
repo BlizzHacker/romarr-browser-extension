@@ -120,13 +120,22 @@ test("every adapter declares what ROMarr needs to accept it", () => {
     assert.ok(adapter.pages.length, `${adapter.id}: no pages`);
     for (const page of adapter.pages) {
       assert.ok(page.path instanceof RegExp, `${adapter.id}: path must be a regex`);
-      assert.ok(["list", "detail"].includes(page.kind), `${adapter.id}: kind`);
+      assert.ok(["list", "detail", "json"].includes(page.kind), `${adapter.id}: kind`);
       for (const required of ["id", "title"]) {
         assert.ok(page.fields[required],
                   `${adapter.id}/${page.kind}: no rule for ${required}`);
       }
       if (page.kind === "list") {
         assert.ok(page.rows, `${adapter.id}: a list page needs a row selector`);
+      }
+      if (page.kind === "json") {
+        // A JSON page has no row selector -- its rows are objects. It must
+        // still say how to recognise one, or the walker would collect the
+        // whole document.
+        assert.ok(page.collect, `${adapter.id}: a json page needs a collect block`);
+        assert.ok(page.urlFrom,
+                  `${adapter.id}: a json row has no href of its own, so the `
+                  + `descriptor must build one`);
       }
     }
   }
@@ -180,6 +189,73 @@ test("paths route to the right page descriptor", () => {
   assert.equal(RomarrAdapters.forPath(vimm, "/vault/3393").groups[1], "3393");
   assert.equal(RomarrAdapters.forPath(vimm, "/vault/GB/A").page.kind, "list");
   assert.equal(RomarrAdapters.forPath(vimm, "/about"), null);
+});
+
+test("a whole-system vault listing is a catalogue page", () => {
+  // https://vimm.net/vault/NES answered "not a catalogue page" on a live
+  // check: the descriptor demanded a letter after the system. That is the
+  // page a person actually lands on when they open a console.
+  const vimm = RomarrAdapters.forHost("vimm.net");
+  assert.equal(RomarrAdapters.forPath(vimm, "/vault/NES").page.kind, "list");
+  assert.equal(RomarrAdapters.forPath(vimm, "/vault/Genesis").page.kind, "list");
+  // Widening it must not have stolen the all-digits form from the detail page.
+  assert.equal(RomarrAdapters.forPath(vimm, "/vault/265").page.kind, "detail");
+});
+
+test("The ROM Depot's API route reads as JSON, not as markup", () => {
+  const depot = RomarrAdapters.forHost("theromdepot.com");
+  assert.equal(RomarrAdapters.forPath(depot, "/api/getContents").page.kind, "json");
+});
+
+// --- the JSON vocabulary ----------------------------------------------------
+
+test("base64 in an attribute decodes, and rubbish does not throw", () => {
+  const {fromBase64} = RomarrExtract;
+  // Exactly what vimm.net/vault/265 carries on its title canvas.
+  assert.equal(fromBase64("RG91YmxlIERyYWdvbiBJSTogVGhlIFJldmVuZ2U="),
+               "Double Dragon II: The Revenge");
+  assert.equal(fromBase64("not base64!"), "");
+  assert.equal(fromBase64(""), "");
+});
+
+test("a JSON tree yields the objects that name a file and state its size", () => {
+  const tree = {
+    contents: [
+      {name: "NES", children: [
+        {name: "Contra (USA).zip", size: 131072, id: "a1"},
+        {name: "notes", children: []}
+      ]},
+      {name: "SNES", children: [{name: "Chrono Trigger.sfc", size: "4 MB", id: "b2"}]}
+    ]
+  };
+  const found = RomarrExtract.jsonFiles(tree, {});
+  assert.equal(found.length, 2, "a folder with no size is not a file");
+  assert.equal(found[0].name, "Contra (USA).zip");
+  // The folder it was found under is what states the console.
+  assert.deepEqual(found[0]._trail, ["NES"]);
+  assert.deepEqual(found[1]._trail, ["SNES"]);
+});
+
+test("the JSON walker survives a shape nobody predicted", () => {
+  // The point of matching on keys rather than on a path: an unexpected
+  // nesting must read fewer fields, not zero rows.
+  const odd = {payload: {tree: {roms: [{fileName: "x.bin", fileSize: 10}]}}};
+  const found = RomarrExtract.jsonFiles(odd, {});
+  assert.equal(found.length, 1);
+  assert.equal(found[0].fileName, "x.bin");
+});
+
+test("a byte count that is already a number is not re-parsed as a size string", () => {
+  assert.equal(RomarrExtract.TRANSFORMS.int(131072), 131072);
+  assert.equal(RomarrExtract.TRANSFORMS.int("131072"), 131072);
+  assert.equal(RomarrExtract.TRANSFORMS.int("nope"), null);
+});
+
+test("site decoration comes off a platform and a region", () => {
+  const {beforeParen, inParen} = RomarrExtract.TRANSFORMS;
+  // Retrostic states these exactly so, live.
+  assert.equal(beforeParen("NES (Get Emulator)"), "NES");
+  assert.equal(inParen("(US)"), "US");
 });
 
 // --- the value cleaners -----------------------------------------------------
