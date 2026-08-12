@@ -1,0 +1,13 @@
+{
+  "name": "romarr-browser-extension",
+  "version": "0.1.0",
+  "description": "Sends catalogue rows from ROM-site pages you open yourself to your own ROMarr.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/sync-manifest.mjs --check && node --test tests/run.mjs",
+    "sync": "node scripts/sync-manifest.mjs",
+    "test:browser": "python tests/browser.py"
+  }
+}

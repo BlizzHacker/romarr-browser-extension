@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+*.pyc
+*.zip
+.DS_Store
+
+# Never commit a real key. The options page is where one belongs, and it lives
+# in the browser's extension storage -- not in this repository.
+*.local.json
+secrets.json

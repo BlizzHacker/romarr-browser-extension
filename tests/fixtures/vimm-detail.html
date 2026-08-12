@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  A Vimm vault detail page, rebuilt from the structure documented in the
+  ROMarr repo's rom-site-survey.md and vimm_index.py.
+
+  Deliberately reproduces the two traps that corrupted the previous capture,
+  so the test proves this extension is not caught by them:
+
+    * the hidden decoy anchor pointing at /vault/999999, and
+    * `href= "..."` written with a space after the equals sign.
+
+  Nothing here is fetched from Vimm. Playwright fulfils the request locally,
+  so this test makes no request to the real site at all.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>4-in-1 Fun Pak - Game Boy - Vimm's Lair</title>
+  <link rel="canonical" href="https://vimm.net/vault/3393">
+</head>
+<body>
+  <a href="/vault/999999" style="display:none">9</a>
+
+  <main>
+    <h1>4-in-1 Fun Pak</h1>
+    <img src="/images/flags/USA.png" title="USA,Europe" alt="USA">
+
+    <table id="dtable">
+      <tr><th>System</th><td>Game Boy</td></tr>
+      <tr><th>Region</th><td>USA,Europe</td></tr>
+      <tr><th>Version</th><td>1.0</td></tr>
+      <tr><th>File Name</th><td>4-in-1 Fun Pak (USA, Europe).gb</td></tr>
+      <tr><th>File Size</th><td>57 KB</td></tr>
+    </table>
+
+    <form method="post" action="//dl3.vimm.net/">
+      <input type="hidden" name="mediaId" value="3279">
+      <button type="submit">Download</button>
+    </form>
+
+    <a href= "/vault/3393?p=play">Play Online</a>
+  </main>
+</body>
+</html>

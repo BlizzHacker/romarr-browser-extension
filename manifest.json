@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "ROMarr capture",
+  "version": "0.1.0",
+  "description": "Sends catalogue rows from ROM-site pages you open yourself to your own ROMarr. It does not browse on its own.",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage", "tabs"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "host_permissions": [
+    "https://vimm.net/*",
+    "https://*.vimm.net/*",
+    "https://retrostic.com/*",
+    "https://*.retrostic.com/*",
+    "https://theromdepot.com/*",
+    "https://*.theromdepot.com/*",
+    "https://cdromance.org/*",
+    "https://*.cdromance.org/*",
+    "https://cdromance.com/*",
+    "https://*.cdromance.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "ROMarr capture",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://vimm.net/*",
+        "https://*.vimm.net/*",
+        "https://retrostic.com/*",
+        "https://*.retrostic.com/*",
+        "https://theromdepot.com/*",
+        "https://*.theromdepot.com/*",
+        "https://cdromance.org/*",
+        "https://*.cdromance.org/*",
+        "https://cdromance.com/*",
+        "https://*.cdromance.com/*"
+      ],
+      "js": ["src/extract.js", "src/adapters.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+# Normalise to LF in the repository. The extension is loaded from source by a
+# browser and the tests are run by node and python, none of which care -- but
+# a mixed-ending diff hides the change that matters inside a wall of noise.
+* text=auto eol=lf
