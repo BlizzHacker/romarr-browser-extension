@@ -157,7 +157,7 @@
     // that carries no file size, most often. They are still worth reading, so
     // the popup can show what is there; they are just not worth posting.
     return {adapter, page: page.kind, rows: unique, url: canonical,
-            indexes: page.indexes !== false};
+            indexes: page.indexes !== false, reason: page.reason || ""};
   }
 
   let latest = null;
@@ -169,6 +169,18 @@
       latest = {error: String(error && error.message ? error.message : error)};
     }
     return latest;
+  }
+
+  function rememberPage(found) {
+    if (!found || !found.adapter || !found.rows || !found.rows.length) return;
+    chrome.runtime.sendMessage({
+      type: "catalog:remember",
+      source: found.adapter.source,
+      items: found.rows
+    }).catch(() => {
+      // Reloading the extension can retire this content-script context while
+      // a message is in flight. The next scan or popup open will retry it.
+    });
   }
 
   // The popup asks what is on this page so the operator can look at the rows
@@ -207,6 +219,7 @@
   });
 
   const found = scan();
+  rememberPage(found);
   if (found && found.indexes && found.rows && found.rows.length) {
     // Offered to the service worker, which decides whether the operator asked
     // for automatic capture. The decision lives there because that is where
@@ -220,4 +233,15 @@
       items: found.rows
     });
   }
+
+  // React/virtual-list pages often have no rows at document_idle and paint
+  // them a moment later. Debouncing subtree changes lets those visible rows
+  // join the local catalog without following a link or requesting a page.
+  // Automatic ROMarr submission is intentionally not repeated here.
+  let rememberTimer = null;
+  const observer = new MutationObserver(() => {
+    clearTimeout(rememberTimer);
+    rememberTimer = setTimeout(() => rememberPage(scan()), 350);
+  });
+  observer.observe(document.documentElement, {childList: true, subtree: true});
 })();

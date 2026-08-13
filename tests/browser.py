@@ -7,7 +7,8 @@ opened, its own content script reads it, its own service worker posts to a
 ROMarr listening on a loopback port, and the assertion is made against the
 `idx-<slug>.jsonl` file ROMarr wrote. Nothing is mocked in the middle.
 
-    python tests/browser.py [--headed] [--repo C:\\path\\to\\romarr]
+    python tests/browser.py [--headed] [--channel brave]
+                            [--repo C:\\path\\to\\romarr]
 
 NO REQUEST REACHES A ROM SITE
 ----------------------------
@@ -71,7 +72,7 @@ def stage_extension(origin: str) -> Path:
     """A copy of the extension with the test's ROMarr origin granted."""
     staged = Path(tempfile.mkdtemp(prefix="romarr-ext-")) / "extension"
     shutil.copytree(ROOT, staged, ignore=shutil.ignore_patterns(
-        ".git", "node_modules", "__pycache__"))
+        ".git", ".venv", "node_modules", "__pycache__"))
     manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
     manifest["host_permissions"] = manifest["host_permissions"] + [origin + "/*"]
     (staged / "manifest.json").write_text(json.dumps(manifest, indent=2),
@@ -79,11 +80,52 @@ def stage_extension(origin: str) -> Path:
     return staged
 
 
+def find_brave(explicit: str = "") -> Path | None:
+    """Return a Brave executable without relying on Playwright channels."""
+    candidates = [explicit, os.environ.get("PLAYWRIGHT_BRAVE_PATH", "")]
+    for root in (os.environ.get("PROGRAMFILES", ""),
+                 os.environ.get("PROGRAMFILES(X86)", "")):
+        if root:
+            candidates.append(str(Path(root) / "BraveSoftware" / "Brave-Browser"
+                                  / "Application" / "brave.exe"))
+    if os.environ.get("LOCALAPPDATA"):
+        candidates.append(str(Path(os.environ["LOCALAPPDATA"]) / "BraveSoftware"
+                              / "Brave-Browser" / "Application" / "brave.exe"))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
+def browser_candidates(channel: str, executable_path: str):
+    """Yield display names and Playwright launch keyword arguments."""
+    if executable_path:
+        yield Path(executable_path).name, {"executable_path": executable_path}
+        return
+    if channel:
+        if channel.lower() == "brave":
+            brave = find_brave()
+            if brave:
+                yield "brave", {"executable_path": str(brave)}
+            else:
+                yield "brave", {"executable_path": "brave-not-found"}
+        else:
+            yield channel, {"channel": channel}
+        return
+    brave = find_brave()
+    if brave:
+        yield "brave", {"executable_path": str(brave)}
+    for name in ("msedge", "chrome", "chromium"):
+        yield name, {"channel": name}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--channel", default="",
-                        help="msedge, chrome or chromium; default tries each")
+                        help="brave, msedge, chrome or chromium; default tries each")
+    parser.add_argument("--executable-path", default="",
+                        help="use a specific Chromium-family browser executable")
     parser.add_argument("--repo", default=os.environ.get(
         "ROMARR_REPO", r"C:\MoveWeight\romarr-work"))
     args = parser.parse_args()
@@ -112,15 +154,15 @@ def main() -> int:
         # machine actually has is fine; the extension does not care.
         context, channel = None, ""
         problems = []
-        for candidate in ([args.channel] if args.channel
-                          else ["msedge", "chrome", "chromium"]):
+        for candidate, launch in browser_candidates(args.channel,
+                                                     args.executable_path):
             try:
                 context = pw.chromium.launch_persistent_context(
                     str(profile),
-                    channel=candidate,
                     headless=not args.headed,
                     args=[f"--disable-extensions-except={staged}",
                           f"--load-extension={staged}"],
+                    **launch,
                 )
                 channel = candidate
                 break
@@ -136,6 +178,12 @@ def main() -> int:
             worker = (context.service_workers[0] if context.service_workers
                       else context.wait_for_event("serviceworker", timeout=15000))
             check("the service worker starts", bool(worker))
+            extension_id = worker.url.split("/")[2]
+            extension_page = context.new_page()
+            extension_page.goto(
+                f"chrome-extension://{extension_id}/src/options.html",
+                wait_until="load",
+            )
 
             # What the operator would type into the options page.
             worker.evaluate(
@@ -164,6 +212,16 @@ def main() -> int:
                               body=(FIXTURES / name).read_text(encoding="utf-8"))
 
             context.route("https://vimm.net/**", serve)
+
+            def serve_depot(route, _request):
+                route.fulfill(
+                    status=200,
+                    content_type="text/html; charset=utf-8",
+                    body=(FIXTURES / "theromdepot-list.html").read_text(
+                        encoding="utf-8"),
+                )
+
+            context.route("https://theromdepot.com/**", serve_depot)
 
             # --- a detail page the operator opened ---------------------------
             page = context.new_page()
@@ -245,6 +303,96 @@ def main() -> int:
             check("the listing's detail pages were NOT followed",
                   not any(d in documents for d in ("/vault/2955", "/vault/4402")),
                   f"the extension followed links: {documents}")
+
+            # --- The ROM Depot's live virtual-list shape -------------------
+            # This is preview-only by design: commercial directory listings
+            # are never posted automatically and their download endpoints do
+            # not become ROMarr index URLs.
+            depot_page = context.new_page()
+            depot_page.goto(
+                "https://theromdepot.com/Nintendo%2064/Europe",
+                wait_until="load",
+            )
+            depot_page.wait_for_timeout(700)
+            depot = worker.evaluate(
+                """async () => {
+                     const [tab] = await chrome.tabs.query(
+                       {url: 'https://theromdepot.com/Nintendo%2064/Europe'});
+                     return await chrome.tabs.sendMessage(
+                       tab.id, {type: 'page:scan'}); }""")
+            depot_rows = (depot or {}).get("rows", [])
+            check("The ROM Depot directory is recognised",
+                  (depot or {}).get("adapter") == "theromdepot", depot)
+            check("only visible file rows are previewed",
+                  len(depot_rows) == 1, depot_rows)
+            check("directory path supplies platform and region",
+                  bool(depot_rows)
+                  and depot_rows[0].get("platform") == "Nintendo 64"
+                  and depot_rows[0].get("region") == "Europe", depot_rows)
+            check("The ROM Depot size is parsed",
+                  bool(depot_rows)
+                  and depot_rows[0].get("size") == 8797553, depot_rows)
+            check("commercial listings are preview-only",
+                  (depot or {}).get("indexes") is False, depot)
+            check("preview URLs do not expose download endpoints",
+                  bool(depot_rows)
+                  and depot_rows[0].get("url")
+                      == "https://theromdepot.com/Nintendo%2064/Europe",
+                  depot_rows)
+            check("preview explains why indexing is disabled",
+                  "download endpoints are not indexed"
+                  in (depot or {}).get("reason", ""), depot)
+
+            # A React/virtualised list can paint new visible rows after the
+            # content script's initial document_idle scan. The DOM observer
+            # should remember that metadata without visiting or fetching it.
+            depot_page.evaluate(
+                """() => {
+                     const row = document.createElement('div');
+                     row.className = 'entry';
+                     row.innerHTML = `
+                       <span class="name-col"><a class="name-col"
+                         href="/api/download/Nintendo%2064/Europe/Late.z64"
+                         download="Late Homebrew.z64">Late Homebrew.z64</a></span>
+                       <span class="size-col">4 MB</span>`;
+                     document.querySelector('#browser-content').append(row);
+                   }""")
+            depot_page.wait_for_timeout(700)
+
+            # --- the durable local metadata catalogue ---------------------
+            # The useful v0.2.6 behaviour is retained without its crawler or
+            # its stored action URLs. A legacy export is accepted, mapped to
+            # a canonical page, and permanently stripped of direct actions.
+            catalog = extension_page.evaluate(
+                """async () => {
+                     await chrome.runtime.sendMessage({
+                       type: 'catalog:import',
+                       items: [{
+                         vault_id: '777', title: 'Legacy Homebrew',
+                         platform: 'Game Boy',
+                         page_url: 'https://vimm.net/vault/777',
+                         download_url: 'https://vimm.net/vault/download.php',
+                         play_url: 'https://vimm.net/vault/?p=play&id=777'
+                       }]
+                     });
+                     return await chrome.runtime.sendMessage(
+                       {type: 'catalog:read', items: true}); }""")
+            catalog_rows = (catalog or {}).get("items", [])
+            legacy = next((row for row in catalog_rows
+                           if row.get("id") == "777"), {})
+            check("opened pages persist in the local metadata catalogue",
+                  any(row.get("source") == "theromdepot"
+                      and row.get("title") == "Homebrew Demo.z64"
+                      for row in catalog_rows), catalog_rows)
+            check("late SPA rows persist without another page request",
+                  any(row.get("source") == "theromdepot"
+                      and row.get("title") == "Late Homebrew.z64"
+                      for row in catalog_rows), catalog_rows)
+            check("v0.2.6 catalogue JSON imports with a canonical page URL",
+                  legacy.get("url") == "https://vimm.net/vault/777", legacy)
+            check("legacy direct action URLs are discarded",
+                  "download_url" not in legacy and "play_url" not in legacy,
+                  legacy)
 
             # --- the connection test reports a real result -------------------
             good = worker.evaluate(

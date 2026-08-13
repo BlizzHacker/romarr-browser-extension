@@ -115,7 +115,8 @@ a failure.
 
 ### Other browsers
 
-**Chrome / Edge / Vivaldi** — identical, at `chrome://extensions` /
+**Brave / Chrome / Edge / Vivaldi** — identical, at `brave://extensions`,
+`chrome://extensions`, or
 `edge://extensions`.
 
 **Firefox** — `about:debugging` → This Firefox → **Load Temporary Add-on** →
@@ -129,20 +130,40 @@ Being specific, because "supports MV3" covers a lot of ground:
 |---|---|
 | **Chromium 151, headed** | **Tested end to end against live sites.** The unpacked extension loaded in real Chromium on a Linux container, opened real `vimm.net` vault pages, and its rows arrived in a real ROMarr's `idx-nes.jsonl` — the service worker's own log reporting `1 indexed, 0 skipped` each time. This is the run the "verified live" rows above come from. |
 | **Microsoft Edge 1xx (Chromium), headless and headed** | **Tested end to end against fixtures.** `tests/browser.py` loads the extension unpacked, opens fixture pages, and asserts against the JSONL file ROMarr wrote. 20 checks, all passing. |
-| **Brave** | **Not run here**, but it is Chromium with the same MV3 runtime as the build above, and it is the browser the set-up guide is written for. Nothing in the extension is engine-specific. |
+| **Brave (Windows, Playwright 1.62)** | **Tested end to end against fixtures: 31/31 checks passing.** `tests/browser.py --channel brave` locates the standard installation or accepts `--executable-path`. |
 | Google Chrome (Chrome-branded build) | **Still not proven.** Chrome 151.0.7922.137 was installed and *does* launch, but in the unprivileged LXC used for testing it cannot reach the network at all — every navigation answers `ERR_INTERNET_DISCONNECTED`, as root and as an ordinary user alike, while Playwright's Chromium build on the same host is fine. That is a container problem rather than an extension one, but it means Chrome-branded builds are untested rather than tested. |
 | Firefox | **Not tested.** Firefox supports MV3, but its background is an event page rather than a service worker and it uses the `browser.*` namespace with `chrome.*` aliased. Expect the load to work and the service worker registration to differ. Treat as unverified. |
 
 Run the browser suite yourself with:
 
 ```sh
-python tests/browser.py                 # picks msedge, chrome or chromium
+python tests/browser.py                 # picks Brave, Edge, Chrome or Chromium
+python tests/browser.py --channel brave --headed
 python tests/browser.py --channel chrome
 ```
 
-It needs `playwright` and a ROMarr checkout (`--repo`, default
+On Windows, `scripts/setup-browser-tests.ps1` creates `.venv` and installs the
+pinned browser-test and ROMarr runtime dependencies. The suite needs a ROMarr
+checkout (`--repo`, default
 `C:\MoveWeight\romarr-work`). It contacts **no ROM site** — every page is
 served from `tests/fixtures/` through Playwright's own routing.
+
+### Local metadata catalog
+
+Every supported page you open contributes sanitized metadata to a searchable
+catalog in extension storage. The toolbar popup searches it, and Settings can
+export it or import the older v0.2.6 `catalog.json` format. Settings also
+accepts The ROM Depot's complete `https://theromdepot.com/api/getContents`
+download and flattens its full `path/name/children/size/type` tree. That API
+requires a signed-in browser and downloads the JSON as a file. Imports discard
+`download_url` and `play_url`; live actions are trusted only on the page where
+the browser found them.
+
+The same conversion is available without opening the extension settings:
+
+```sh
+node scripts/theromdepot-catalog.mjs getContents.json theromdepot-catalog.json
+```
 
 ---
 
@@ -212,15 +233,20 @@ does not take a stranger's word for which hosts are legitimate.
 
 ## Sites with adapters
 
-Each of these fails for a *different* reason that a real browser answers
-honestly.
+These combine server-side providers with the page the operator actually sees.
+Some require a real browser session; others use Capture to keep the rendered
+catalogue and its available actions visible in one local search surface.
 
-| Site | Why a plain HTTP client cannot do it | Selector confidence |
+| Site | Why Capture adds value | Selector confidence |
 |---|---|---|
 | **Vimm's Lair** | No GET URL for a ROM exists. The download is a POST to `dl3.vimm.net` carrying a `mediaId`; a GET there answers 400. Only a page you are genuinely on can submit it. | **Verified live, 2026-08-12** — every field read off real vault pages in real Chromium, and captured into a real ROMarr. |
 | **Retrostic** | Search works over plain HTTP, but the download control is a form POST carrying a **per-render `session` token** that only exists for someone who really loaded the page. | **Verified live, 2026-08-12** — selectors confirmed on three pages. The site publishes **no file size**, so ROMarr refuses the rows; see below. |
-| **The ROM Depot** | `GET /api/getContents` returns the entire directory tree in one call — and **401** without a session. A plugin's cookie jar is cleared before every request, so it can never be signed in. You can be. | **Unverified** — needs your session. Reads the JSON, matching key names from a candidate list. |
+| **The ROM Depot** | `GET /api/getContents` returns the entire directory tree in one download and requires a signed-in browser. | **Verified 2026-08-12:** exact `path/name/children/mtime/size/type` tree; 262,571 files across 154 platform roots. Settings imports the downloaded JSON directly. |
 | **CDRomance** | Every path, `robots.txt` included, answers a Cloudflare **managed challenge** to a plain client. | **Unverified** — nobody here could load a page to look at. |
+| **CoolROM** | The operator's own browser is now the accepted integration boundary; the extension reads only the page they opened and never crawls. | **Preview-first** — the historical detail URL shape is covered, with defensive selector fallbacks. |
+| **RomuLation** | Public search is readable by the plugin, while downloads require a paid signed-in session and per-render token. | **Search markup verified** from the provider fixture; the browser adapter captures the rendered rows and exposes the account requirement. |
+| **EmuParadise** | The catalogue remains useful even though the site no longer serves game files. | **Search markup verified** from the provider fixture; metadata-only by design. |
+| **Webmulator** | Search/list cards omit file size, while the rendered detail page publishes it in metadata. | **Listing markup verified** from provider fixtures; lists are preview-only and detail pages are indexable when size is present. |
 
 ### Vimm's: what "verified live" cost, and why it mattered
 
@@ -314,17 +340,13 @@ extension does not help you, and that is the correct outcome.
 
 ---
 
-## Sites deliberately **without** adapters
+## Site deliberately **without** an adapter
 
-An adapter is only worth writing for a site a plain HTTP client genuinely
-cannot read. Anything else means asking a person to browse pages a server
-could have fetched on its own.
+The remaining omission has no live origin for either a server or a browser to
+read.
 
 | Site | Why not |
 |---|---|
-| **RomuLation** | Its search already works over plain HTTP — ROMarr has a plugin. The only thing a browser would add is the download link, and that sits under `/roms/newdownload/…`, a path **its own `robots.txt` disallows**, behind a per-render encrypted token, behind a paid account. Catalogue capture would duplicate the plugin; download capture is the part we are declining. |
-| **EmuParadise** | **Stopped hosting game files in 2018.** The browse tree and the entire download flow still render, and then say the game is unavailable. The catalogue is readable over plain HTTP already; a browser adds nothing. |
-| **CoolROM** | Its `robots.txt` names `anthropic-ai` and `Claude-Web` with `Disallow: /`. This extension was written by one of those. The survey that produced the other adapters **stopped at `robots.txt` and fetched nothing further**, and shipping an adapter would be that same act at one remove. Whether *your* browser may visit a site you can already visit is your call, not this repository's — but it will not be pre-packaged here. |
 | **Gamulator** | The origin is gone. `gamulator.com` is NXDOMAIN; `www.` resolves only to Cloudflare and returns **530 / error 1016** on every path. There is nothing to survey and nothing to index. |
 
 ---

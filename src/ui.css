@@ -31,6 +31,9 @@ body {
   font: 15px/1.55 system-ui, -apple-system, Segoe UI, sans-serif;
 }
 body.popup { width: 380px; padding: 14px; }
+.catalog-search { padding-bottom: 0; }
+.catalog-search .row { margin-top: 8px; }
+.catalog-search input { min-width: 0; }
 
 h1 { font-size: 19px; margin: 0 0 10px; }
 h2 { font-size: 15px; margin: 0 0 8px; text-transform: uppercase;

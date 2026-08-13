@@ -72,6 +72,26 @@
     <ul id="log" class="log"></ul>
   </section>
 
+  <section>
+    <h2>Local metadata catalog</h2>
+    <p class="note small">
+      Searchable metadata from pages you opened or catalogs you imported is
+      kept in extension storage.
+      Import accepts the old v0.2.6 <code>catalog.json</code> format or The ROM
+      Depot's complete <code>/api/getContents</code> download. Play and direct
+      download URLs are discarded.
+    </p>
+    <div class="row">
+      <span id="catalog-total" class="pending">0 saved</span>
+      <button id="catalog-export" class="secondary">Export metadata</button>
+      <button id="catalog-import" class="secondary">Import catalog/API JSON</button>
+      <input id="catalog-file" type="file" accept="application/json" hidden>
+    </div>
+    <p id="catalog-result" class="result" role="status"></p>
+  </section>
+
+  <script src="adapters.js"></script>
+  <script src="catalog.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

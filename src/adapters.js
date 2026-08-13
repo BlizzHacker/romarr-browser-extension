@@ -29,6 +29,45 @@
 (function (root) {
   "use strict";
 
+  // Exact mappings shared with the matching ROM Hub providers. Keeping the
+  // source ids/slugs here avoids asking ROMarr to guess from display labels.
+  const EMUPARADISE_PLATFORMS = {
+    "1": "dc", "2": "psx", "3": "saturn", "4": "amiga", "5": "snes",
+    "6": "genesis-slash-megadrive", "7": "arcade", "8": "neo-geo-cd",
+    "9": "n64", "10": "segacd", "11": "gbc", "12": "gb", "13": "nes",
+    "14": "gamegear", "15": "sms", "16": "turbografx16--1",
+    "18": "turbografx-16-slash-pc-engine-cd", "19": "philips-cd-i",
+    "20": "3do", "22": "amiga-cd32", "23": "sharp-x68000",
+    "24": "apple2", "25": "psx", "27": "virtualboy", "28": "lynx",
+    "29": "fds", "30": "arcade", "31": "gba", "32": "nds", "33": "c64",
+    "34": "c64", "35": "zxs", "36": "zxs", "39": "wonderswan",
+    "40": "wonderswan-color", "41": "ps2", "42": "ngc", "43": "xbox",
+    "44": "psp", "47": "atari7800", "48": "atari5200", "49": "atari2600",
+    "50": "jaguar", "54": "arcade", "55": "arcade", "57": "atari8bit",
+    "61": "sega32", "62": "acpc", "63": "atari-st", "64": "pc-fx",
+    "66": "arcade", "68": "wii"
+  };
+
+  const WEBMULATOR_PLATFORMS = {
+    "3do": "3do", "amiga": "amiga", "atari-2600": "atari2600",
+    "atari-5200": "atari5200", "atari-7800": "atari7800",
+    "atari-jaguar": "jaguar", "atari-lynx": "lynx",
+    "capcom-play-system-1": "arcade", "capcom-play-system-2": "arcade",
+    "capcom-play-system-3": "arcade", "colecovision": "colecovision",
+    "gameboy": "gb", "gameboy-advance": "gba", "gameboy-color": "gbc",
+    "gce-vectrex": "vectrex", "intellivision": "intellivision",
+    "magnavox-odissey-2": "odyssey-2-slash-videopac-g7000", "mame": "arcade",
+    "msx": "msx", "neo-geo-pocket": "neo-geo-pocket", "nintendo": "nes",
+    "nintendo-64": "n64", "nintendo-ds": "nds",
+    "nintendo-virtual-boy": "virtualboy", "pc-fx": "pc-fx",
+    "playstation-1": "psx", "sega-32x": "sega32", "sega-cd": "segacd",
+    "sega-game-gear": "gamegear", "sega-genesis": "genesis-slash-megadrive",
+    "sega-master-system": "sms", "sega-saturn": "saturn",
+    "sharp-x68000": "sharp-x68000", "super-nintendo": "snes",
+    "turbografx16": "turbografx16--1", "wonderswan": "wonderswan",
+    "wonderswan-color": "wonderswan-color"
+  };
+
   const ADAPTERS = [
     {
       id: "vimm",
@@ -211,10 +250,9 @@
       label: "The ROM Depot",
       source: "theromdepot",
       hosts: ["theromdepot.com", "*.theromdepot.com"],
-      notes: "Reads the JSON at /api/getContents, which needs YOUR session. "
-             + "Key names are matched from a candidate list, so an unexpected "
-             + "shape reads fields rather than reporting an empty page -- but "
-             + "the shape itself is unconfirmed. Check the popup on first run.",
+      notes: "The complete /api/getContents JSON needs YOUR signed-in browser. "
+             + "Download it once and import it in Settings; the verified tree "
+             + "uses path, name, children, mtime, size and type.",
       // Why a browser: every API call including the directory listing answers
       // 401 without a session. A plugin has its cookie jar cleared before
       // every request and so can never be signed in; the operator signing in
@@ -234,11 +272,8 @@
           kind: "json",
           path: /^\/api\/getContents\/?$/,
           // The tree's shape is the site's own and was not observed -- the
-          // endpoint 401s without a session and nobody's session was used to
-          // find out. So rows are recognised by the keys they carry rather
-          // than by a path into the document, and each candidate list is
-          // ordered most-likely-first. `_trail` carries the folder names a
-          // row was found under, outermost first.
+          // The verified tree uses path/name/children/mtime/size/type. The
+          // fallback names stay accepted so older exports still import.
           collect: {
             nameKeys: ["name", "filename", "file_name", "fileName", "title", "path"],
             sizeKeys: ["size", "bytes", "filesize", "file_size", "fileSize", "length"],
@@ -275,24 +310,33 @@
           }
         },
         {
-          // The browse pages, kept as a fallback for someone who would rather
-          // capture what they are looking at than open the API. Still
-          // provisional: the rendered DOM of the SPA was never observed.
+          // The normal directory pages. The live React bundle renders a
+          // virtualised list: only rows in front of the operator exist in the
+          // DOM, each as `.entry`, with the filename and size in named
+          // columns. Reading those visible rows keeps the extension's central
+          // promise -- it does not walk the directory tree or call the API.
+          //
+          // These listings contain commercial releases, so they are preview
+          // only. The extension deliberately does not post them to ROMarr and
+          // points every preview row back to the directory page, not the
+          // site's download endpoint.
           kind: "list",
-          path: /^\/(?:browse|files|contents)(?:\/.*)?$/,
-          rows: "table tbody tr, [role='row'], li[data-path]",
+          path: /^\/(?!api(?:\/|$))([^/]+)(?:\/([^/]+))?(?:\/.*)?$/,
+          indexes: false,
+          reason: "directory listings are metadata preview only; direct "
+                  + "download endpoints are not indexed",
+          rows: ".entry:not(.header):has(a[download])",
           fields: {
-            id: [{attr: ["a[href]", "href"], then: [["match", ["([^/]+)$"]]]},
-                 {attr: ["[data-path]", "data-path"], then: [["match", ["([^/]+)$"]]]}],
-            title: [{text: "a[href]"}, {text: "[data-name]"}],
-            size: [{text: "td:nth-child(2)", then: ["bytes"]},
-                   {attr: ["[data-size]", "data-size"]}],
-            name: [{text: "a[href]"}],
+            id: [{attr: ["a[download]", "download"]}],
+            title: [{shownText: "a[download]"}],
+            size: [{text: ".size-col", then: ["bytes"]}],
+            name: [{attr: ["a[download]", "download"]}],
             platform: [{const: ""}]
           },
           urlFrom: (row, ctx) => ctx.canonical,
           pageFields: {
-            platform: [{text: "h1"}, {text: "[aria-current='page']"}]
+            platform: [{group: 1, then: ["urlDecode"]}],
+            region: [{group: 2, then: ["urlDecode"]}]
           }
         }
       ]
@@ -360,6 +404,141 @@
           pageFields: {
             platform: [{text: ".breadcrumb a:nth-last-child(2)"},
                        {text: "a[rel='category tag']"}]
+          }
+        }
+      ]
+    },
+
+    {
+      id: "coolrom",
+      label: "CoolROM",
+      source: "coolrom",
+      hosts: ["coolrom.com", "*.coolrom.com", "coolrom.com.au", "*.coolrom.com.au"],
+      notes: "Browser-assisted and preview-first. Detail URLs use the site's "
+             + "long-standing /roms/<platform>/<id>/<title>.php shape; verify "
+             + "title, platform and size in the popup before sending.",
+      pages: [
+        {
+          kind: "detail",
+          path: /^\/roms\/([^/]+)\/(\d+)\/[^/]+\.php\/?$/i,
+          fields: {
+            id: [{group: 2}],
+            title: [{text: "h1"}, {text: ".rom-title"},
+                    {meta: "og:title", then: ["beforeSeparator"]},
+                    {title: true, then: ["beforeSeparator"]}],
+            platform: [{label: "system"}, {label: "console"},
+                       {group: 1, then: ["slugLabel"]}],
+            size: [{label: "file size", then: ["bytes"]},
+                   {label: "size", then: ["bytes"]},
+                   {text: ".file-size", then: ["bytes"]}],
+            region: [{label: "region"}, {attr: ["img[src*='flag']", "title"]}],
+            name: [{label: "file name"}, {label: "filename"}]
+          },
+          urlFrom: (_row, ctx) => ctx.canonical
+        },
+        {
+          kind: "list",
+          path: /^\/(?:roms|search)(?:\/.*|\.php)?$/i,
+          indexes: false,
+          reason: "listing selectors are provisional and listings may omit file sizes; preview before sending",
+          rows: "tr:has(a[href*='/roms/']), .rom-row, .rom",
+          fields: {
+            id: [{attr: ["a[href*='/roms/']", "href"], then: ["idHash"]}],
+            title: [{shownText: "a[href*='/roms/']"}, {text: ".rom-title"}],
+            platform: [{text: ".system"}, {text: ".console"}],
+            size: [{scopeText: true, then: [["match", ["([0-9.,]+\\s*(?:K|M|G|T)i?B?)", 1]], "bytes"]}],
+            url: [{attr: ["a[href*='/roms/']", "href"], then: ["https"]}]
+          }
+        }
+      ]
+    },
+
+    {
+      id: "romulation",
+      label: "RomuLation",
+      source: "romulation",
+      hosts: ["romulation.org", "*.romulation.org"],
+      notes: "Search rows are captured from the page already open in the browser. "
+             + "Downloads still require the operator's paid signed-in session.",
+      pages: [{
+        kind: "list",
+        path: /^\/roms\/search\/?$/,
+        rows: "table.roms tbody tr",
+        fields: {
+          id: [{attr: ["a[href^='/rom/']", "href"], then: ["idHash"]}],
+          title: [{text: "a[href^='/rom/']",
+                   then: [["match", ["^\\s*\\[[^\\]]+\\]\\s*(.+)$", 1]]]}],
+          platform: [{attr: ["a[href^='/rom/']", "href"],
+                      then: [["match", ["^/rom/([^/]+)/", 1]], "slugLabel"]}],
+          size: [{text: ".filesize", then: ["bytes"]}],
+          region: [{text: "span[class^='flags-']"}],
+          url: [{attr: ["a[href^='/rom/']", "href"], then: ["https"]}]
+        }
+      }]
+    },
+
+    {
+      id: "emuparadise",
+      label: "EmuParadise",
+      source: "emuparadise",
+      hosts: ["emuparadise.me", "*.emuparadise.me"],
+      notes: "Captures catalogue metadata from EmuParadise search pages. "
+             + "The site stopped serving game files, so this remains discovery-only.",
+      pages: [{
+        kind: "list",
+        path: /^\/roms\/search\.php$/,
+        rows: "div.roms",
+        fields: {
+          id: [{attr: ["a[data-filter][href]", "href"],
+                then: [["match", ["/(\\d+)/?$", 1]]]}],
+          title: [{text: "a[data-filter][href]",
+                   then: [["match", ["^(.*?)\\s+(?:ROMs?|ISOs?|Game)$", 1]]]},
+                  {text: "a[data-filter][href]"}],
+          platform: [{attr: ["a[data-filter][href]", "data-filter"],
+                      then: [["map", EMUPARADISE_PLATFORMS]]}],
+          size: [{scopeText: true,
+                  then: [["match", ["Size:\\s*([0-9.]+\\s*[KMGT]B?)", 1]], "bytes"]}],
+          url: [{attr: ["a[data-filter][href]", "href"], then: ["https"]}]
+        }
+      }]
+    },
+
+    {
+      id: "webmulator",
+      label: "Webmulator",
+      source: "webmulator",
+      hosts: ["webmulator.com", "*.webmulator.com"],
+      notes: "Detail pages include a file-size meta tag and can be indexed. "
+             + "Search and platform cards are retained as metadata previews because they omit size.",
+      pages: [
+        {
+          kind: "detail",
+          path: /^\/games\/([^/]+)\/([^/]+)\/?$/,
+          fields: {
+            id: [{canonical: true, then: ["idHash"]}],
+            title: [{text: "h1"}, {meta: "og:title", then: ["beforeSeparator"]},
+                    {title: true, then: ["beforeSeparator"]}],
+            platform: [{group: 1, then: [["map", WEBMULATOR_PLATFORMS]]}],
+            size: [{attr: ["meta[itemprop='fileSize']", "content"], then: ["bytes"]},
+                   {label: "file size", then: ["bytes"]}],
+            region: [{label: "region"}, {attr: ["img[src*='flag']", "title"]}]
+          },
+          urlFrom: (_row, ctx) => ctx.canonical
+        },
+        {
+          kind: "list",
+          path: /^\/(?:search\.php|games(?:\/[^/]+(?:\/page\/\d+)?)?)$/,
+          indexes: false,
+          reason: "cards omit file size; open a game detail page to create an indexable row",
+          rows: "div[class*='col-']:has(.single-rom)",
+          fields: {
+            id: [{attr: ["a[href^='/games/']:has(.single-rom)", "href"], then: ["idHash"]},
+                 {attr: ["a[href^='/games/']", "href"], then: ["idHash"]}],
+            title: [{text: ".roms-title"}],
+            platform: [{text: "a.emulator"}],
+            region: [{text: ".roms-title", then: [["match", ["\\(([^)]+)\\)", 1]]]}],
+            url: [{attr: ["a[href^='/games/']:has(.single-rom)", "href"], then: ["https"]},
+                  {attr: ["a[href^='/games/']", "href"], then: ["https"]}]
           }
         }
       ]

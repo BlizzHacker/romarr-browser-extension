@@ -6,6 +6,7 @@
   "minimum_chrome_version": "102",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "tabs"
   ],
   "optional_host_permissions": [
@@ -22,7 +23,17 @@
     "https://cdromance.org/*",
     "https://*.cdromance.org/*",
     "https://cdromance.com/*",
-    "https://*.cdromance.com/*"
+    "https://*.cdromance.com/*",
+    "https://coolrom.com/*",
+    "https://*.coolrom.com/*",
+    "https://coolrom.com.au/*",
+    "https://*.coolrom.com.au/*",
+    "https://romulation.org/*",
+    "https://*.romulation.org/*",
+    "https://emuparadise.me/*",
+    "https://*.emuparadise.me/*",
+    "https://webmulator.com/*",
+    "https://*.webmulator.com/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -44,7 +55,17 @@
         "https://cdromance.org/*",
         "https://*.cdromance.org/*",
         "https://cdromance.com/*",
-        "https://*.cdromance.com/*"
+        "https://*.cdromance.com/*",
+        "https://coolrom.com/*",
+        "https://*.coolrom.com/*",
+        "https://coolrom.com.au/*",
+        "https://*.coolrom.com.au/*",
+        "https://romulation.org/*",
+        "https://*.romulation.org/*",
+        "https://emuparadise.me/*",
+        "https://*.emuparadise.me/*",
+        "https://webmulator.com/*",
+        "https://*.webmulator.com/*"
       ],
       "js": [
         "src/extract.js",

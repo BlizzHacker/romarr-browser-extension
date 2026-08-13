@@ -1,7 +1,8 @@
 <!doctype html>
 <!--
-  A Vimm vault detail page, rebuilt from the structure documented in the
-  ROMarr repo's rom-site-survey.md and vimm_index.py.
+  A Vimm vault detail page. Selector-critical elements mirror the live page
+  observed in Chromium on 2026-08-12; the table preserves documented fallback
+  markup so both shapes remain covered.
 
   Deliberately reproduces the two traps that corrupted the previous capture,
   so the test proves this extension is not caught by them:
@@ -20,6 +21,7 @@
 </head>
 <body>
   <a href="/vault/999999" style="display:none">9</a>
+  <div class="sectionTitle">Game Boy</div>
 
   <main>
     <h1>4-in-1 Fun Pak</h1>

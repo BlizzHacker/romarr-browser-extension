@@ -116,7 +116,7 @@
                                                        "file_size", "fileSize", "length"];
     const childKeys = (options && options.childKeys) || ["children", "contents", "items",
                                                          "files", "nodes", "entries"];
-    const limit = (options && options.limit) || 20000;
+    const limit = (options && options.limit) || 500000;
     const out = [];
     const pick = (obj, keys) => {
       for (const key of keys) {
@@ -151,7 +151,7 @@
 
   /** "1.2 MB" -> bytes. Returns null rather than guessing at a unit. */
   function bytes(value) {
-    const match = clean(value).match(/([\d.,]+)\s*(bytes|B|KB|KiB|MB|MiB|GB|GiB|TB|TiB)\b/i);
+    const match = clean(value).match(/([\d.,]+)\s*(bytes|B|K|KB|KiB|M|MB|MiB|G|GB|GiB|T|TB|TiB)\b/i);
     if (!match) return null;
     // Thousands separators only. A European "1,2 GB" would be misread as
     // 12 GB, so a comma followed by exactly two digits at the end is treated
@@ -161,8 +161,8 @@
       ? digits.replace(",", ".") : digits.replace(/,/g, "");
     const size = Number(digits);
     if (!isFinite(size) || size <= 0) return null;
-    const power = {b: 0, bytes: 0, kb: 1, kib: 1, mb: 2, mib: 2,
-                   gb: 3, gib: 3, tb: 4, tib: 4}[match[2].toLowerCase()];
+    const power = {b: 0, bytes: 0, k: 1, kb: 1, kib: 1, m: 2, mb: 2, mib: 2,
+                   g: 3, gb: 3, gib: 3, t: 4, tb: 4, tib: 4}[match[2].toLowerCase()];
     return Math.round(size * Math.pow(1024, power));
   }
 
@@ -191,6 +191,20 @@
     return found ? found[0] : "";
   }
 
+  /** A stable, capture-safe id for sites whose canonical id is a URL path. */
+  function idHash(value) {
+    const raw = clean(value);
+    if (!raw) return "";
+    // FNV-1a, represented as eight lowercase hex digits. This is an identity
+    // handle, not a security boundary; the source URL remains the authority.
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < raw.length; index += 1) {
+      hash ^= raw.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
+  }
+
   //: name -> how to pull a raw value out of a scope. A descriptor names one.
   const PICKERS = {
     /** textContent of the first match. */
@@ -198,6 +212,10 @@
       const el = ctx.scope.querySelector(selector);
       return el ? clean(el.textContent) : "";
     },
+    /** Text of the row/document scope itself, including loose text nodes. */
+    scopeText(ctx) { return clean(ctx.scope && ctx.scope.textContent); },
+    /** The canonical page URL computed by the content script. */
+    canonical(ctx) { return clean(ctx.canonical || ctx.url); },
     /** An attribute of the first match: ["a.download", "href"]. */
     attr(ctx, spec) {
       const el = ctx.scope.querySelector(spec[0]);
@@ -271,6 +289,7 @@
   const TRANSFORMS = {
     bytes: (value) => bytes(value),
     digits: (value) => digits(value),
+    idHash: (value) => idHash(value),
     /** Base64 out of an attribute -- see fromBase64, and Vimm's canvases. */
     base64: (value) => fromBase64(value),
     /** A plain integer, for a JSON field that already counts bytes. */
@@ -288,6 +307,15 @@
     https: (value, arg, ctx) => httpsUrl(value, ctx.url),
     param: (value, name, ctx) => param(value, name, ctx.url),
     lower: (value) => clean(value).toLowerCase(),
+    /** A site's URL slug as a platform label ROMarr can resolve. */
+    slugLabel: (value) => clean(String(value).replace(/[_-]+/g, " ")),
+    /** Exact source value -> canonical ROMarr slug; unknown stays unmapped. */
+    map: (value, table) => (table && table[clean(value)]) || "",
+    /** A path segment from location.pathname, without throwing on bad escapes. */
+    urlDecode: (value) => {
+      try { return clean(decodeURIComponent(String(value))); }
+      catch (_) { return clean(value); }
+    },
     /** Everything before the first "|" or " - ", for `<title>`-derived names. */
     beforeSeparator: (value) => clean(String(value).split(/\s+[|–-]\s+/)[0]),
     /** A regex capture, written as [pattern, group]. */
@@ -334,7 +362,7 @@
   }
 
   root.RomarrExtract = {
-    clean, visible, labelled, bytes, param, httpsUrl, digits,
+    clean, visible, labelled, bytes, param, httpsUrl, digits, idHash,
     fromBase64, jsonFiles,
     field, record, PICKERS, TRANSFORMS
   };

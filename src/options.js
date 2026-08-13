@@ -11,6 +11,8 @@
 
 const $ = (id) => document.getElementById(id);
 const send = (message) => chrome.runtime.sendMessage(message);
+const CATALOG_KEY = "romarr_catalog_v1";
+const MAX_CATALOG = 500000;
 
 /** Text, never HTML: an adapter label is data and this page is not a place to
  * find out that somebody put a tag in one. */
@@ -24,7 +26,7 @@ function say(element, text, kind) {
  *
  * The manifest does not claim access to every host; it asks for the one host
  * the operator typed, when they type it. An extension that shipped with
- * `https://*/*` in host_permissions would be asking for the whole web in
+ * a wildcard HTTPS origin in host_permissions would be asking for the whole web in
  * order to reach one LAN address.
  */
 async function grant(url) {
@@ -73,6 +75,13 @@ async function load() {
     host.appendChild(label);
   }
   await refreshOutbox();
+  await refreshCatalog();
+}
+
+async function refreshCatalog() {
+  const state = await send({type: "catalog:read"});
+  $("catalog-total").textContent = `${state.count || 0} saved`;
+  return state;
 }
 
 async function refreshOutbox() {
@@ -139,6 +148,50 @@ $("flush").onclick = async () => {
                             : "Nothing waiting."),
       result.ok ? "ok" : "bad");
   await refreshOutbox();
+};
+
+$("catalog-export").onclick = async () => {
+  const stored = await chrome.storage.local.get(CATALOG_KEY);
+  const items = Array.isArray(stored[CATALOG_KEY]) ? stored[CATALOG_KEY] : [];
+  const payload = JSON.stringify({
+    version: 1,
+    generated_at: new Date().toISOString(),
+    source: "ROMarr local metadata catalog",
+    items
+  }, null, 2);
+  const href = URL.createObjectURL(new Blob([payload], {type: "application/json"}));
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = "romarr-catalog-metadata.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+};
+
+$("catalog-import").onclick = () => $("catalog-file").click();
+$("catalog-file").onchange = async () => {
+  const file = $("catalog-file").files[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    const candidates = Array.isArray(payload.items)
+      ? payload.items
+      : globalThis.RomarrCatalog.fromTheRomDepotTree(payload, MAX_CATALOG);
+    if (!candidates.length) {
+      throw new Error("JSON is neither a catalog nor a getContents tree");
+    }
+    const stored = await chrome.storage.local.get(CATALOG_KEY);
+    const current = Array.isArray(stored[CATALOG_KEY]) ? stored[CATALOG_KEY] : [];
+    const merged = globalThis.RomarrCatalog.merge(
+      current, "", candidates, MAX_CATALOG);
+    await chrome.storage.local.set({[CATALOG_KEY]: merged});
+    say($("catalog-result"),
+        `Imported ${candidates.length.toLocaleString()} rows; `
+        + `${merged.length.toLocaleString()} total saved.`, "ok");
+    await refreshCatalog();
+  } catch (error) {
+    say($("catalog-result"), "Import failed: " + error.message, "bad");
+  }
+  $("catalog-file").value = "";
 };
 
 load();

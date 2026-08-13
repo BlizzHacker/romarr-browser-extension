@@ -16,11 +16,12 @@
 
 "use strict";
 
-importScripts("adapters.js");
+importScripts("adapters.js", "catalog.js");
 
 const SETTINGS_KEY = "romarr_settings_v1";
 const OUTBOX_KEY = "romarr_outbox_v1";
 const LOG_KEY = "romarr_log_v1";
+const CATALOG_KEY = "romarr_catalog_v1";
 
 //: Matches romarr/capture.py MAX_ITEMS. A page with more rows than this is
 //: split rather than refused, because the server is right to cap it and the
@@ -32,6 +33,7 @@ const BATCH = 500;
 //: what the previous extension's 100,000-item local store turned into.
 const MAX_OUTBOX = 50;
 const MAX_LOG = 40;
+const MAX_CATALOG = 500000;
 
 const DEFAULTS = {
   url: "",
@@ -48,6 +50,18 @@ async function settings() {
 async function saveSettings(patch) {
   const merged = Object.assign(await settings(), patch || {});
   await chrome.storage.local.set({[SETTINGS_KEY]: merged});
+  return merged;
+}
+
+async function readCatalog() {
+  const got = await chrome.storage.local.get(CATALOG_KEY);
+  return Array.isArray(got[CATALOG_KEY]) ? got[CATALOG_KEY] : [];
+}
+
+async function remember(source, rows) {
+  const merged = globalThis.RomarrCatalog.merge(
+    await readCatalog(), source, rows, MAX_CATALOG);
+  await chrome.storage.local.set({[CATALOG_KEY]: merged});
   return merged;
 }
 
@@ -248,6 +262,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       // The page found rows. Whether they go anywhere is this side's
       // decision, because this is the side that knows what the operator
       // asked for.
+      await remember(message.source, message.items);
       const config = await settings();
       if (!config.automatic || !adapterEnabled(config, message.adapter)) {
         return respond({ok: true, sent: false, reason: "automatic capture off"});
@@ -255,7 +270,30 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       return respond(await submit(message.source, message.items));
     }
     if (message.type === "capture:submit") {
+      await remember(message.source, message.items);
       return respond(await submit(message.source, message.items));
+    }
+    if (message.type === "catalog:remember") {
+      const items = await remember(message.source, message.items);
+      return respond({ok: true, count: items.length});
+    }
+    if (message.type === "catalog:read") {
+      const items = await readCatalog();
+      return respond(Object.assign(
+        {ok: true, count: items.length},
+        message.items === true ? {items} : {}
+      ));
+    }
+    if (message.type === "catalog:search") {
+      return respond({
+        ok: true,
+        items: globalThis.RomarrCatalog.search(
+          await readCatalog(), message.query, message.limit)
+      });
+    }
+    if (message.type === "catalog:import") {
+      const items = await remember("", message.items);
+      return respond({ok: true, count: items.length});
     }
     if (message.type === "settings:get") return respond(await settings());
     if (message.type === "settings:set") return respond(await saveSettings(message.value));

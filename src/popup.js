@@ -77,16 +77,20 @@ async function look() {
     $("where").appendChild(note);
   }
   renderRows(rows);
+  if (rows.length) {
+    await chrome.runtime.sendMessage({
+      type: "catalog:remember", source: found.source || "", items: rows
+    });
+  }
 
-  // A page that lists games without their file sizes can be read but not
-  // indexed -- ROMarr refuses a catalogue row whose size is unknown. Say so
-  // plainly instead of offering a button that would report 40 rejections.
+  // Some pages are useful as metadata previews but deliberately not eligible
+  // for indexing. Explain the descriptor's exact reason instead of offering
+  // a button that is guaranteed to be refused or unsafe.
   if (rows.length && !found.indexes) {
     const why = document.createElement("small");
-    why.textContent =
-      "This page lists games but not their file sizes, so ROMarr cannot "
-      + "index from it. Open a game to capture it. The extension will not "
-      + "open them for you.";
+    why.textContent = found.reason
+      ? found.reason.charAt(0).toUpperCase() + found.reason.slice(1) + "."
+      : "This page is metadata preview only and cannot be sent to ROMarr.";
     $("where").appendChild(why);
   }
   $("send").disabled = rows.length === 0 || !found.indexes;
@@ -113,4 +117,38 @@ $("send").onclick = async () => {
 
 $("options").onclick = () => chrome.runtime.openOptionsPage();
 
-look();
+function renderCatalog(rows) {
+  const host = $("catalog-results");
+  host.textContent = "";
+  for (const row of rows || []) {
+    const item = document.createElement("div");
+    item.className = "item";
+    const name = document.createElement("b");
+    name.textContent = row.title;
+    const meta = document.createElement("small");
+    meta.textContent = [row.source, row.platform || "platform unknown",
+                        row.region || "region unknown"].join(" · ");
+    item.appendChild(name);
+    item.appendChild(meta);
+    host.appendChild(item);
+  }
+}
+
+async function searchCatalog() {
+  const result = await chrome.runtime.sendMessage({
+    type: "catalog:search", query: $("catalog-query").value, limit: 12
+  });
+  renderCatalog(result.items || []);
+}
+
+$("catalog-search").onclick = searchCatalog;
+$("catalog-query").onkeydown = (event) => {
+  if (event.key === "Enter") searchCatalog();
+};
+
+async function refreshCatalogCount() {
+  const result = await chrome.runtime.sendMessage({type: "catalog:read"});
+  $("catalog-count").textContent = `${result.count || 0} saved locally`;
+}
+
+look().then(refreshCatalogCount);
