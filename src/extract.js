@@ -361,9 +361,112 @@
     return out;
   }
 
+  const _DOWNLOAD_EXTS = new Set([
+    "zip", "7z", "rar", "tar", "gz", "tgz", "xz", "bz2",
+    "nes", "fds", "unf", "sfc", "smc", "fig", "swc", "gb", "gbc", "gba",
+    "nds", "dsi", "3ds", "cia", "n64", "z64", "v64", "iso", "bin", "cue",
+    "chd", "rvz", "wbfs", "wad", "nsp", "xci", "nsz", "xcz", "pbp", "cso",
+    "vpk", "pkg", "xbe", "xex", "dol", "gcm", "wua", "wud", "wux", "dsk",
+    "adf", "tap", "tzx", "pce", "md", "gen", "sms", "gg", "sg", "32x",
+    "ngp", "ngc", "ws", "wsc", "lnx", "a26", "a52", "a78", "j64", "jag",
+    "vec", "col", "int", "msx",
+    "jar", "mrpack", "pak", "asi", "dll", "exe", "msi", "appimage", "deb",
+    "rpm", "dmg", "pdf", "epub", "cbz", "cbr", "txt", "vtt", "srt"
+  ]);
+
+  const _DOWNLOAD_URL_HINTS = [
+    /\/releases\/download\//i,
+    /codeload\.github\.com\/.+\/zip\//i,
+    /cdn\.modrinth\.com\/data\//i,
+    /gamebanana\.com\/dl\//i,
+    /thunderstore\.io\/package\/download\//i,
+    /archive\.org\/download\//i,
+    /[?&](?:download|dl)=1\b/i,
+    /[?&]action=download\b/i
+  ];
+
+  const _SIZE_HINT = /\b(\d+(?:[.,]\d+)?\s*(?:[KMGT]i?B|bytes))\b/i;
+
+  function _filenameFromUrl(urlStr, fallbackText) {
+    try {
+      const parsed = new URL(urlStr);
+      const seg = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
+      if (seg && seg.includes(".")) return clean(seg);
+      const qName = parsed.searchParams.get("filename") || parsed.searchParams.get("file");
+      if (qName) return clean(qName);
+    } catch (_) {
+      // ignore
+    }
+    return clean(fallbackText || "download.bin").slice(0, 120) || "download.bin";
+  }
+
+  function _extOf(filename, urlStr) {
+    const target = (filename || urlStr || "").split("?")[0].split("#")[0];
+    const dot = target.lastIndexOf(".");
+    if (dot < 0) return "";
+    return target.slice(dot + 1).toLowerCase();
+  }
+
+  /**
+   * Extract downloadable file links from any open webpage DOM.
+   * Reads only the passed Document; never performs network requests.
+   */
+  function extractDownloadLinks(doc, pageUrl) {
+    if (!doc || !doc.querySelectorAll) return [];
+    const base = String(pageUrl || (doc.location && doc.location.href) || "");
+    const nodes = doc.querySelectorAll("a[href], source[src], [data-download-url], [data-url]");
+    const seen = new Set();
+    const out = [];
+    for (const el of nodes) {
+      if (out.length >= 500) break;
+      const raw = (el.getAttribute && (
+        el.getAttribute("href")
+        || el.getAttribute("src")
+        || el.getAttribute("data-download-url")
+        || el.getAttribute("data-url")
+      )) || "";
+      const trimmed = String(raw).trim();
+      if (!trimmed || trimmed.startsWith("#") || /^(?:javascript|mailto|data|blob):/i.test(trimmed)) {
+        continue;
+      }
+      let resolved;
+      try {
+        resolved = base ? new URL(trimmed, base).href : new URL(trimmed).href;
+      } catch (_) {
+        continue;
+      }
+      if (!/^https?:\/\//i.test(resolved) || seen.has(resolved)) continue;
+
+      const hasAttr = el.hasAttribute && el.hasAttribute("download");
+      const text = clean(el.textContent || el.getAttribute("title") || el.getAttribute("aria-label") || "");
+      const filename = _filenameFromUrl(resolved, text);
+      const ext = _extOf(filename, resolved);
+      const isExtMatch = _DOWNLOAD_EXTS.has(ext);
+      const isHintMatch = _DOWNLOAD_URL_HINTS.some((re) => re.test(resolved));
+      if (!hasAttr && !isExtMatch && !isHintMatch) continue;
+      if (!visible(el)) continue;
+
+      seen.add(resolved);
+      let sizeText = "";
+      const row = el.closest ? el.closest("tr, li, .row, .item, .file, div") : null;
+      if (row) {
+        const m = clean(row.textContent).match(_SIZE_HINT);
+        if (m) sizeText = m[1];
+      }
+      out.push({
+        url: resolved,
+        filename,
+        ext: ext || "file",
+        label: text || filename,
+        size_text: sizeText
+      });
+    }
+    return out;
+  }
+
   root.RomarrExtract = {
     clean, visible, labelled, bytes, param, httpsUrl, digits, idHash,
-    fromBase64, jsonFiles,
+    fromBase64, jsonFiles, extractDownloadLinks,
     field, record, PICKERS, TRANSFORMS
   };
 })(typeof globalThis !== "undefined" ? globalThis : self);

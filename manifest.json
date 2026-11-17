@@ -7,7 +7,10 @@
   "permissions": [
     "storage",
     "unlimitedStorage",
-    "tabs"
+    "tabs",
+    "activeTab",
+    "scripting",
+    "downloads"
   ],
   "optional_host_permissions": [
     "http://*/*",

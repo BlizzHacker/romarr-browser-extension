@@ -22,6 +22,8 @@ const SETTINGS_KEY = "romarr_settings_v1";
 const OUTBOX_KEY = "romarr_outbox_v1";
 const LOG_KEY = "romarr_log_v1";
 const CATALOG_KEY = "romarr_catalog_v1";
+const ACTIVE_DL_KEY = "romarr_active_downloads_v1";
+const COMPLETED_DL_KEY = "romarr_completed_downloads_v1";
 
 //: Matches romarr/capture.py MAX_ITEMS. A page with more rows than this is
 //: split rather than refused, because the server is right to cap it and the
@@ -106,24 +108,25 @@ async function note(entry) {
  * previous capture had, where 23,980 rows carried an empty field nobody
  * noticed for months.
  */
-async function post(config, source, items) {
+async function romarrFetch(config, method, path, bodyObj) {
   const base = baseUrl(config.url);
   if (!base) return {ok: false, error: "no ROMarr URL configured"};
   if (!config.apiKey) return {ok: false, error: "no API key configured"};
   let response;
   try {
-    response = await fetch(base + "/api/v1/capture", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": config.apiKey
-      },
+    const opts = {
+      method,
+      headers: {"X-Api-Key": config.apiKey},
       // The extension's own request, carrying no page's cookies. `omit` is
       // what keeps a capture from riding on whatever session the operator
       // happens to have with their own server.
-      credentials: "omit",
-      body: JSON.stringify({source, items})
-    });
+      credentials: "omit"
+    };
+    if (bodyObj !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(bodyObj);
+    }
+    response = await fetch(base + path, opts);
   } catch (error) {
     return {ok: false, error: "could not reach ROMarr: " + error.message};
   }
@@ -134,14 +137,27 @@ async function post(config, source, items) {
     payload = {};
   }
   if (response.status === 401) {
-    return {ok: false, status: 401,
-            error: "ROMarr refused the API key"};
+    return {ok: false, status: 401, error: "ROMarr refused the API key"};
+  }
+  if (response.status === 404) {
+    return {
+      ok: false,
+      status: 404,
+      error: "reached ROMarr, but endpoint " + path + " was not found (update ROMarr)"
+    };
   }
   if (!response.ok) {
-    return {ok: false, status: response.status,
-            error: payload.error || ("ROMarr answered " + response.status)};
+    return {
+      ok: false,
+      status: response.status,
+      error: payload.error || ("ROMarr answered " + response.status)
+    };
   }
-  return Object.assign({ok: true, status: response.status}, payload);
+  return Object.assign({ok: true, status: response.status, base}, payload);
+}
+
+async function post(config, source, items) {
+  return romarrFetch(config, "POST", "/api/v1/capture", {source, items});
 }
 
 /** Split a page into server-sized batches and send each. */
@@ -212,35 +228,10 @@ async function flush() {
  */
 async function test(candidate) {
   const config = Object.assign(await settings(), candidate || {});
-  const base = baseUrl(config.url);
-  if (!base) return {ok: false, error: "enter your ROMarr address first"};
+  if (!baseUrl(config.url)) return {ok: false, error: "enter your ROMarr address first"};
   if (!config.apiKey) return {ok: false, error: "enter your ROMarr API key first"};
-  let response;
-  try {
-    response = await fetch(base + "/api/v1/capture/status", {
-      headers: {"X-Api-Key": config.apiKey},
-      credentials: "omit"
-    });
-  } catch (error) {
-    return {ok: false, error: "could not reach " + base + ": " + error.message};
-  }
-  if (response.status === 401) {
-    return {ok: false, error: "reached ROMarr, but it refused the API key"};
-  }
-  if (response.status === 404) {
-    return {ok: false,
-            error: "reached ROMarr, but it has no capture endpoint -- "
-                   + "this needs a ROMarr new enough to accept captures"};
-  }
-  if (!response.ok) {
-    return {ok: false, error: "ROMarr answered " + response.status};
-  }
-  let payload = {};
-  try {
-    payload = await response.json();
-  } catch (_) {
-    return {ok: false, error: "ROMarr answered something that was not JSON"};
-  }
+  const payload = await romarrFetch(config, "GET", "/api/v1/capture/status");
+  if (!payload.ok) return payload;
   if (payload.index_writable === false) {
     return {ok: false,
             error: "reached ROMarr and the key works, but its index "
@@ -248,10 +239,129 @@ async function test(candidate) {
   }
   return {
     ok: true,
-    base,
+    base: payload.base,
     sources: (payload.sources || []).map((s) => s.source),
     detail: "connected, key accepted, index writable"
   };
+}
+
+function sanitizeSubdir(raw) {
+  return String(raw || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((s) => s.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/^[.\s]+|[.\s]+$/g, ""))
+    .filter((s) => s && s !== "." && s !== "..")
+    .join("/");
+}
+
+function sanitizeBasename(raw) {
+  return String(raw || "download.bin")
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/^[.\s]+|[.\s]+$/g, "") || "download.bin";
+}
+
+async function sendServerDownloads(message) {
+  const config = await settings();
+  const items = Array.isArray(message.items) ? message.items : [];
+  if (!items.length) return {ok: false, error: "select at least one file"};
+  const res = await romarrFetch(config, "POST", "/api/v1/extension/downloads", {
+    items,
+    page_url: message.pageUrl || "",
+    page_title: message.pageTitle || "",
+    platform: message.platform || "",
+    destination: message.destination || ""
+  });
+  await note({source: "ext-server-dl", ok: Boolean(res.ok), queued: res.queued || 0, error: res.error || ""});
+  return res;
+}
+
+async function startLocalDownloads(message) {
+  if (!chrome.downloads || !chrome.downloads.download) {
+    return {ok: false, error: "chrome.downloads permission unavailable"};
+  }
+  const items = Array.isArray(message.items) ? message.items : [];
+  if (!items.length) return {ok: false, error: "select at least one file"};
+  const subdir = sanitizeSubdir(message.destination || "");
+  const got = await chrome.storage.local.get(ACTIVE_DL_KEY);
+  const active = got[ACTIVE_DL_KEY] || {};
+  const started = [];
+  const errors = [];
+
+  for (const item of items) {
+    const cleanName = sanitizeBasename(item.filename || "download.bin");
+    const targetName = subdir ? `${subdir}/${cleanName}` : cleanName;
+    try {
+      const downloadId = await chrome.downloads.download({
+        url: item.url,
+        filename: targetName,
+        conflictAction: "uniquify"
+      });
+      active[String(downloadId)] = {
+        url: item.url,
+        filename: cleanName,
+        pageUrl: message.pageUrl || "",
+        platform: message.platform || "",
+        destination: subdir,
+        autoSendCompleted: Boolean(message.autoSendCompleted),
+        adopt: Boolean(message.adopt)
+      };
+      started.push({id: downloadId, filename: targetName});
+    } catch (err) {
+      errors.push(`${cleanName}: ${err.message || err}`);
+    }
+  }
+  await chrome.storage.local.set({[ACTIVE_DL_KEY]: active});
+  return {ok: started.length > 0, started: started.length, errors};
+}
+
+if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.onChanged) {
+  chrome.downloads.onChanged.addListener((delta) => {
+    if (!delta || !delta.state || delta.state.current !== "complete") return;
+    (async () => {
+      const got = await chrome.storage.local.get([ACTIVE_DL_KEY, COMPLETED_DL_KEY]);
+      const active = got[ACTIVE_DL_KEY] || {};
+      const key = String(delta.id);
+      const meta = active[key];
+      if (!meta) return;
+      delete active[key];
+      await chrome.storage.local.set({[ACTIVE_DL_KEY]: active});
+
+      const found = await chrome.downloads.search({id: delta.id});
+      const dl = (found && found[0]) || {};
+      const completedItem = {
+        url: meta.url,
+        filename: meta.filename,
+        local_path: dl.filename || "",
+        file_size: Number(dl.bytesReceived || dl.fileSize || 0),
+        page_url: meta.pageUrl || "",
+        platform: meta.platform || "",
+        completed_at: new Date().toISOString()
+      };
+      const prev = got[COMPLETED_DL_KEY] || [];
+      await chrome.storage.local.set({
+        [COMPLETED_DL_KEY]: [completedItem].concat(prev).slice(0, MAX_LOG)
+      });
+
+      if (meta.autoSendCompleted) {
+        const config = await settings();
+        const res = await romarrFetch(config, "POST", "/api/v1/extension/completed", {
+          items: [completedItem],
+          platform: meta.platform || "",
+          adopt: Boolean(meta.adopt)
+        });
+        await note({
+          source: "ext-local-complete",
+          ok: Boolean(res.ok),
+          filename: completedItem.filename,
+          adopted: res.adopted || 0,
+          error: res.error || ""
+        });
+      }
+    })().catch(() => {});
+  });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -316,6 +426,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           hosts: a.hosts, enabled: adapterEnabled(config, a.id)
         }))
       });
+    }
+    if (message.type === "downloads:send_server") {
+      return respond(await sendServerDownloads(message));
+    }
+    if (message.type === "downloads:start_local") {
+      return respond(await startLocalDownloads(message));
+    }
+    if (message.type === "downloads:completed_list") {
+      const got = await chrome.storage.local.get(COMPLETED_DL_KEY);
+      return respond({ok: true, items: got[COMPLETED_DL_KEY] || []});
     }
     return respond({ok: false, error: "unknown message " + message.type});
   })().catch((error) => respond({ok: false, error: String(error)}));

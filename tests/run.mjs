@@ -73,8 +73,7 @@ test("only the service worker makes network requests", () => {
 test("the service worker makes requests to exactly one place", () => {
   const source = srcFile("background.js");
   const calls = source.match(/\bfetch\s*\(/g) || [];
-  assert.equal(calls.length, 2, "expected exactly two fetch call sites: the "
-                                + "capture post and the connection test");
+  assert.equal(calls.length, 1, "expected a single fetch call site in romarrFetch");
   // Both are built from the configured base URL. A literal http(s) URL in
   // this file would be a request to somewhere the operator did not choose.
   const literals = source.match(/["'`]https?:\/\/(?!\*)[^"'`\s]+/g) || [];
@@ -113,7 +112,8 @@ test("manifest host patterns match the adapter list", () => {
 
 test("the manifest is v3 and asks for no more than it needs", () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ["storage", "unlimitedStorage", "tabs"]);
+  assert.deepEqual(manifest.permissions,
+                   ["storage", "unlimitedStorage", "tabs", "activeTab", "scripting", "downloads"]);
   // The operator's ROMarr is on an address only they know, so it is asked for
   // at the moment they type it rather than claimed up front.
   assert.ok(!manifest.host_permissions.includes("https://*/*"));

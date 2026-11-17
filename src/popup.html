@@ -13,6 +13,32 @@
     <button id="options" class="secondary">Settings</button>
   </div>
   <p id="result" class="result" role="status"></p>
+  <hr style="border:0;border-top:1px solid #333;margin:10px 0">
+  <section id="files-section">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+      <strong style="font-size:13px">Page Files (<span id="file-count">0</span>)</strong>
+      <div style="display:flex;gap:4px">
+        <button id="dl-select-all" class="secondary" type="button" style="padding:2px 6px;font-size:11px">All</button>
+        <button id="dl-select-none" class="secondary" type="button" style="padding:2px 6px;font-size:11px">None</button>
+      </div>
+    </div>
+    <input id="file-filter" type="text" placeholder="Filter files (e.g. .zip, .nes, mod)" style="width:100%;box-sizing:border-box;margin:6px 0;padding:4px 6px">
+    <div id="files-list" class="preview" style="max-height:150px;overflow:auto"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+      <input id="dl-platform" type="text" placeholder="Platform (optional, e.g. nes)" style="padding:4px 6px">
+      <input id="dl-dest" type="text" placeholder="Subfolder (optional)" style="padding:4px 6px">
+    </div>
+    <label class="small" style="display:block;margin-top:6px">
+      <input id="dl-after-complete" type="checkbox" checked> Send completed local downloads to ROMarr
+    </label>
+    <label class="small" style="display:block;margin-top:3px">
+      <input id="dl-adopt" type="checkbox"> Auto-adopt on server if local path is shared
+    </label>
+    <div class="row" style="margin-top:8px">
+      <button id="dl-server" type="button" disabled>Send to Server</button>
+      <button id="dl-local" type="button" class="secondary" disabled>Download Locally</button>
+    </div>
+  </section>
   <section class="catalog-search">
     <h2>Local catalog</h2>
     <div class="row">

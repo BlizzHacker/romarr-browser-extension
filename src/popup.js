@@ -44,18 +44,107 @@ function renderRows(rows) {
 }
 
 let current = null;
+let pageFiles = [];
+let activeTabInfo = {url: "", title: ""};
+const selectedUrls = new Set();
+
+function filteredFiles() {
+  const q = ($("file-filter") ? $("file-filter").value : "").trim().toLowerCase();
+  if (!q) return pageFiles;
+  return pageFiles.filter((f) =>
+    (f.filename || "").toLowerCase().includes(q)
+    || (f.label || "").toLowerCase().includes(q)
+    || (f.ext || "").toLowerCase().includes(q)
+  );
+}
+
+function updateDownloadButtons() {
+  const count = selectedUrls.size;
+  if ($("dl-server")) $("dl-server").disabled = count === 0;
+  if ($("dl-local")) $("dl-local").disabled = count === 0;
+}
+
+function renderFiles() {
+  const host = $("files-list");
+  if (!host) return;
+  host.textContent = "";
+  const list = filteredFiles();
+  $("file-count").textContent = `${selectedUrls.size}/${pageFiles.length}`;
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "note small";
+    empty.textContent = pageFiles.length ? "No files match filter." : "No downloadable file links found on this page.";
+    host.appendChild(empty);
+    updateDownloadButtons();
+    return;
+  }
+  for (const file of list.slice(0, 100)) {
+    const row = document.createElement("label");
+    row.className = "item";
+    row.style.display = "flex";
+    row.style.alignItems = "flex-start";
+    row.style.gap = "6px";
+    row.style.cursor = "pointer";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selectedUrls.has(file.url);
+    cb.onchange = () => {
+      if (cb.checked) selectedUrls.add(file.url);
+      else selectedUrls.delete(file.url);
+      $("file-count").textContent = `${selectedUrls.size}/${pageFiles.length}`;
+      updateDownloadButtons();
+    };
+    const info = document.createElement("div");
+    const name = document.createElement("b");
+    name.textContent = file.filename || file.label;
+    const meta = document.createElement("small");
+    meta.style.display = "block";
+    meta.textContent = [file.ext || "file", file.size_text || ""].filter(Boolean).join(" · ");
+    info.appendChild(name);
+    info.appendChild(meta);
+    row.appendChild(cb);
+    row.appendChild(info);
+    host.appendChild(row);
+  }
+  updateDownloadButtons();
+}
+
+async function scanPageFiles(tab) {
+  if (!tab || !tab.id || !/^https?:\/\//i.test(tab.url || "")) {
+    renderFiles();
+    return;
+  }
+  activeTabInfo = {url: tab.url || "", title: tab.title || ""};
+  try {
+    await chrome.scripting.executeScript({
+      target: {tabId: tab.id},
+      files: ["src/extract.js"]
+    });
+    const [{result}] = await chrome.scripting.executeScript({
+      target: {tabId: tab.id},
+      func: () => (globalThis.RomarrExtract
+        ? globalThis.RomarrExtract.extractDownloadLinks(document, location.href)
+        : [])
+    });
+    pageFiles = Array.isArray(result) ? result : [];
+    for (const f of pageFiles) selectedUrls.add(f.url);
+  } catch (_) {
+    pageFiles = [];
+  }
+  renderFiles();
+}
 
 async function look() {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   if (!tab || !tab.id) return say("No page here.", "");
+  scanPageFiles(tab);
   let found;
   try {
     found = await chrome.tabs.sendMessage(tab.id, {type: "page:scan"});
   } catch (_) {
-    // No content script in this tab: the page is not one of the covered
-    // sites, so there is nothing to read and nothing was injected into it.
+    // No catalog adapter on this tab; universal Page Files extractor still runs.
     $("where").textContent =
-      "This site has no adapter, so the extension is not running here.";
+      "No catalog adapter on this site — use Page Files below to extract & download.";
     $("send").disabled = true;
     return;
   }
@@ -149,6 +238,66 @@ $("catalog-query").onkeydown = (event) => {
 async function refreshCatalogCount() {
   const result = await chrome.runtime.sendMessage({type: "catalog:read"});
   $("catalog-count").textContent = `${result.count || 0} saved locally`;
+}
+
+if ($("file-filter")) $("file-filter").oninput = () => renderFiles();
+if ($("dl-select-all")) {
+  $("dl-select-all").onclick = () => {
+    for (const f of filteredFiles()) selectedUrls.add(f.url);
+    renderFiles();
+  };
+}
+if ($("dl-select-none")) {
+  $("dl-select-none").onclick = () => {
+    for (const f of filteredFiles()) selectedUrls.delete(f.url);
+    renderFiles();
+  };
+}
+
+function selectedFileItems() {
+  return pageFiles.filter((f) => selectedUrls.has(f.url));
+}
+
+if ($("dl-server")) {
+  $("dl-server").onclick = async () => {
+    const items = selectedFileItems();
+    if (!items.length) return;
+    say(`Queueing ${items.length} file(s) on ROMarr server…`, "");
+    const res = await chrome.runtime.sendMessage({
+      type: "downloads:send_server",
+      items,
+      pageUrl: activeTabInfo.url,
+      pageTitle: activeTabInfo.title,
+      platform: ($("dl-platform") && $("dl-platform").value.trim()) || "",
+      destination: ($("dl-dest") && $("dl-dest").value.trim()) || ""
+    });
+    if (!res || !res.ok) {
+      return say((res && res.error) || "Server download failed.", "bad");
+    }
+    say(`Server queued ${res.queued} file(s) → ${res.dest_dir}`, "ok");
+  };
+}
+
+if ($("dl-local")) {
+  $("dl-local").onclick = async () => {
+    const items = selectedFileItems();
+    if (!items.length) return;
+    say(`Starting ${items.length} local Chrome download(s)…`, "");
+    const res = await chrome.runtime.sendMessage({
+      type: "downloads:start_local",
+      items,
+      pageUrl: activeTabInfo.url,
+      platform: ($("dl-platform") && $("dl-platform").value.trim()) || "",
+      destination: ($("dl-dest") && $("dl-dest").value.trim()) || "",
+      autoSendCompleted: Boolean($("dl-after-complete") && $("dl-after-complete").checked),
+      adopt: Boolean($("dl-adopt") && $("dl-adopt").checked)
+    });
+    if (!res || !res.ok) {
+      return say((res && res.error) || "Could not start local downloads.", "bad");
+    }
+    say(`Started ${res.started} local download(s).`
+        + (res.errors && res.errors.length ? ` Errors: ${res.errors.length}` : ""), "ok");
+  };
 }
 
 look().then(refreshCatalogCount);
