@@ -58,10 +58,51 @@ function filteredFiles() {
   );
 }
 
+//: A file-host landing page is HTML; downloading its URL saves the page.
+const isMirror = (f) => f.kind === "mirror";
+
 function updateDownloadButtons() {
-  const count = selectedUrls.size;
-  if ($("dl-server")) $("dl-server").disabled = count === 0;
-  if ($("dl-local")) $("dl-local").disabled = count === 0;
+  const chosen = selectedFileItems();
+  const files = chosen.filter((f) => !isMirror(f)).length;
+  const pages = chosen.length - files;
+  if ($("dl-server")) $("dl-server").disabled = files === 0;
+  if ($("dl-local")) $("dl-local").disabled = files === 0;
+  if ($("dl-open")) $("dl-open").disabled = pages === 0;
+  if ($("dl-copy")) $("dl-copy").disabled = chosen.length === 0;
+}
+
+/** One line per multi-part set: its host, how many parts, which are missing. */
+function renderSets() {
+  const host = $("sets-list");
+  if (!host || !globalThis.RomarrMirrors) return;
+  host.textContent = "";
+  for (const group of globalThis.RomarrMirrors.groupSets(pageFiles)) {
+    if (group.parts.length < 2 && !group.missing.length) continue;
+    const item = document.createElement("div");
+    item.className = "item";
+    const name = document.createElement("b");
+    name.textContent = group.set;
+    const meta = document.createElement("small");
+    meta.textContent = [
+      group.host_label || "direct files",
+      `${group.parts.length} part${group.parts.length === 1 ? "" : "s"}`,
+      group.complete ? "complete" : "missing part " + group.missing.join(", ")
+    ].join(" · ");
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "secondary";
+    pick.style.cssText = "padding:1px 6px;font-size:11px;margin-left:6px";
+    pick.textContent = "Select set";
+    pick.onclick = () => {
+      selectedUrls.clear();
+      for (const part of group.parts) selectedUrls.add(part.url);
+      renderFiles();
+    };
+    name.appendChild(pick);
+    item.appendChild(name);
+    item.appendChild(meta);
+    host.appendChild(item);
+  }
 }
 
 function renderFiles() {
@@ -99,7 +140,11 @@ function renderFiles() {
     name.textContent = file.filename || file.label;
     const meta = document.createElement("small");
     meta.style.display = "block";
-    meta.textContent = [file.ext || "file", file.size_text || ""].filter(Boolean).join(" · ");
+    meta.textContent = [
+      file.host_label ? file.host_label + (isMirror(file) ? " page" : " file") : (file.ext || "file"),
+      file.part ? "part " + file.part : "",
+      file.size_text || ""
+    ].filter(Boolean).join(" · ");
     info.appendChild(name);
     info.appendChild(meta);
     row.appendChild(cb);
@@ -118,7 +163,7 @@ async function scanPageFiles(tab) {
   try {
     await chrome.scripting.executeScript({
       target: {tabId: tab.id},
-      files: ["src/extract.js"]
+      files: ["src/mirrors.js", "src/extract.js"]
     });
     const [{result}] = await chrome.scripting.executeScript({
       target: {tabId: tab.id},
@@ -131,6 +176,7 @@ async function scanPageFiles(tab) {
   } catch (_) {
     pageFiles = [];
   }
+  renderSets();
   renderFiles();
 }
 
@@ -258,9 +304,19 @@ function selectedFileItems() {
   return pageFiles.filter((f) => selectedUrls.has(f.url));
 }
 
+/** Selected direct files, and the folder a single selected set should use. */
+function selectedDownloads() {
+  const items = selectedFileItems().filter((f) => !isMirror(f));
+  const sets = new Set(items.map((f) => f.set || ""));
+  const typed = ($("dl-dest") && $("dl-dest").value.trim()) || "";
+  const only = sets.size === 1 ? [...sets][0] : "";
+  const destination = typed || (only ? only.replace(/\.[^.]+$/, "") : "");
+  return {items, destination};
+}
+
 if ($("dl-server")) {
   $("dl-server").onclick = async () => {
-    const items = selectedFileItems();
+    const {items, destination} = selectedDownloads();
     if (!items.length) return;
     say(`Queueing ${items.length} file(s) on ROMarr server…`, "");
     const res = await chrome.runtime.sendMessage({
@@ -269,7 +325,7 @@ if ($("dl-server")) {
       pageUrl: activeTabInfo.url,
       pageTitle: activeTabInfo.title,
       platform: ($("dl-platform") && $("dl-platform").value.trim()) || "",
-      destination: ($("dl-dest") && $("dl-dest").value.trim()) || ""
+      destination
     });
     if (!res || !res.ok) {
       return say((res && res.error) || "Server download failed.", "bad");
@@ -280,7 +336,7 @@ if ($("dl-server")) {
 
 if ($("dl-local")) {
   $("dl-local").onclick = async () => {
-    const items = selectedFileItems();
+    const {items, destination} = selectedDownloads();
     if (!items.length) return;
     say(`Starting ${items.length} local Chrome download(s)…`, "");
     const res = await chrome.runtime.sendMessage({
@@ -288,7 +344,7 @@ if ($("dl-local")) {
       items,
       pageUrl: activeTabInfo.url,
       platform: ($("dl-platform") && $("dl-platform").value.trim()) || "",
-      destination: ($("dl-dest") && $("dl-dest").value.trim()) || "",
+      destination,
       autoSendCompleted: Boolean($("dl-after-complete") && $("dl-after-complete").checked),
       adopt: Boolean($("dl-adopt") && $("dl-adopt").checked)
     });
@@ -297,6 +353,29 @@ if ($("dl-local")) {
     }
     say(`Started ${res.started} local download(s).`
         + (res.errors && res.errors.length ? ` Errors: ${res.errors.length}` : ""), "ok");
+  };
+}
+
+if ($("dl-open")) {
+  $("dl-open").onclick = async () => {
+    const urls = selectedFileItems().filter(isMirror).map((f) => f.url);
+    if (!urls.length) return;
+    const res = await chrome.runtime.sendMessage({type: "mirrors:open", urls});
+    if (!res || !res.ok) return say((res && res.error) || "Could not open pages.", "bad");
+    say(`Opened ${res.opened} page(s) in background tabs.`, "ok");
+  };
+}
+
+if ($("dl-copy")) {
+  $("dl-copy").onclick = async () => {
+    const chosen = selectedFileItems();
+    const ordered = chosen.slice().sort((a, b) => (a.part || 0) - (b.part || 0));
+    try {
+      await navigator.clipboard.writeText(ordered.map((f) => f.url).join("\n"));
+      say(`Copied ${ordered.length} link(s), one per line.`, "ok");
+    } catch (_) {
+      say("The clipboard refused the copy.", "bad");
+    }
   };
 }
 

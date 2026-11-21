@@ -10,7 +10,8 @@
     "tabs",
     "activeTab",
     "scripting",
-    "downloads"
+    "downloads",
+    "declarativeNetRequest"
   ],
   "optional_host_permissions": [
     "http://*/*",
@@ -77,5 +78,14 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ad_networks",
+        "enabled": true,
+        "path": "rules/ad_networks.json"
+      }
+    ]
+  }
 }

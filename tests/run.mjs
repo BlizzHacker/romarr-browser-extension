@@ -113,7 +113,8 @@ test("manifest host patterns match the adapter list", () => {
 test("the manifest is v3 and asks for no more than it needs", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(manifest.permissions,
-                   ["storage", "unlimitedStorage", "tabs", "activeTab", "scripting", "downloads"]);
+                   ["storage", "unlimitedStorage", "tabs", "activeTab", "scripting", "downloads",
+                    "declarativeNetRequest"]);
   // The operator's ROMarr is on an address only they know, so it is asked for
   // at the moment they type it rather than claimed up front.
   assert.ok(!manifest.host_permissions.includes("https://*/*"));

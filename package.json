@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node scripts/sync-manifest.mjs --check && node --test tests/run.mjs",
+    "test": "node scripts/sync-manifest.mjs --check && node --test tests/run.mjs tests/mirrors.test.mjs",
     "sync": "node scripts/sync-manifest.mjs",
     "test:browser": "python tests/browser.py"
   }

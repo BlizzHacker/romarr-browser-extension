@@ -16,7 +16,7 @@
 
 "use strict";
 
-importScripts("adapters.js", "catalog.js");
+importScripts("adapters.js", "catalog.js", "mirrors.js");
 
 const SETTINGS_KEY = "romarr_settings_v1";
 const OUTBOX_KEY = "romarr_outbox_v1";
@@ -41,8 +41,15 @@ const DEFAULTS = {
   url: "",
   apiKey: "",
   automatic: true,
-  enabled: {}
+  enabled: {},
+  closePopups: true,
+  blockAds: true
 };
+
+//: How many landing pages one press of "Open pages" may open.
+const MAX_OPEN_PAGES = 30;
+//: How long a blank new tab is watched for its first real address.
+const POPUP_WATCH_MS = 15000;
 
 async function settings() {
   const got = await chrome.storage.local.get(SETTINGS_KEY);
@@ -364,6 +371,92 @@ if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.onChan
   });
 }
 
+// --- file-host pages: opening them, and closing what they open ------------
+//
+// Landing pages are opened only when the operator presses "Open pages", one
+// tab per selected link, never more than MAX_OPEN_PAGES. Those tabs are ours
+// and are never treated as pop-ups. Any other tab a file host or release page
+// opens is judged by RomarrMirrors.isPopup: a tab to another site is closed,
+// a tab to a file host or the same site is the download and stays.
+
+const openedByUs = new Set();
+const watching = new Map();
+
+async function openMirrorPages(message) {
+  const urls = (Array.isArray(message.urls) ? message.urls : [])
+    .filter((u) => /^https?:\/\//i.test(String(u))).slice(0, MAX_OPEN_PAGES);
+  if (!urls.length) return {ok: false, error: "select at least one page"};
+  for (const url of urls) {
+    const tab = await chrome.tabs.create({url, active: false});
+    if (tab && tab.id !== undefined) openedByUs.add(tab.id);
+  }
+  return {ok: true, opened: urls.length};
+}
+
+async function judgeTab(tabId, openerUrl, targetUrl) {
+  if (!globalThis.RomarrMirrors.isPopup(openerUrl, targetUrl)) return false;
+  try {
+    await chrome.tabs.remove(tabId);
+    await note({source: "popup-closer", ok: true, closed: new URL(targetUrl).hostname});
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function blankUrl(url) {
+  return !url || url === "about:blank" || /^chrome:\/\/newtab/i.test(url);
+}
+
+if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    (async () => {
+      if (!tab || tab.id === undefined || tab.openerTabId === undefined) return;
+      if (openedByUs.has(tab.id)) return;
+      if (!(await settings()).closePopups) return;
+      let opener;
+      try {
+        opener = await chrome.tabs.get(tab.openerTabId);
+      } catch (_) {
+        return;
+      }
+      const openerUrl = (opener && (opener.url || opener.pendingUrl)) || "";
+      const target = tab.pendingUrl || tab.url || "";
+      if (blankUrl(target)) {
+        watching.set(tab.id, {openerUrl, until: Date.now() + POPUP_WATCH_MS});
+        return;
+      }
+      await judgeTab(tab.id, openerUrl, target);
+    })().catch(() => {});
+  });
+  chrome.tabs.onUpdated.addListener((tabId, change) => {
+    const seen = watching.get(tabId);
+    if (!seen || !change || !change.url || blankUrl(change.url)) return;
+    watching.delete(tabId);
+    if (Date.now() > seen.until) return;
+    judgeTab(tabId, seen.openerUrl, change.url).catch(() => {});
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    openedByUs.delete(tabId);
+    watching.delete(tabId);
+  });
+}
+
+/** Turn the bundled ad-network blocklist on or off to match the setting. */
+async function applyAdBlocking(config) {
+  if (!chrome.declarativeNetRequest || !chrome.declarativeNetRequest.updateEnabledRulesets) {
+    return;
+  }
+  const on = (config || await settings()).blockAds !== false;
+  await chrome.declarativeNetRequest.updateEnabledRulesets(
+    on ? {enableRulesetIds: ["ad_networks"]} : {disableRulesetIds: ["ad_networks"]});
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => { applyAdBlocking().catch(() => {}); });
+  chrome.runtime.onInstalled.addListener(() => { applyAdBlocking().catch(() => {}); });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   (async () => {
     if (!message || !message.type) return respond({ok: false, error: "no message"});
@@ -406,7 +499,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       return respond({ok: true, count: items.length});
     }
     if (message.type === "settings:get") return respond(await settings());
-    if (message.type === "settings:set") return respond(await saveSettings(message.value));
+    if (message.type === "settings:set") {
+      const saved = await saveSettings(message.value);
+      await applyAdBlocking(saved).catch(() => {});
+      return respond(saved);
+    }
+    if (message.type === "mirrors:open") return respond(await openMirrorPages(message));
     if (message.type === "settings:test") return respond(await test(message.value));
     if (message.type === "outbox:flush") return respond(await flush());
     if (message.type === "outbox:read") {

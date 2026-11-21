@@ -49,6 +49,8 @@ async function load() {
   $("url").value = config.url || "";
   $("key").value = config.apiKey || "";
   $("automatic").checked = config.automatic !== false;
+  $("closePopups").checked = config.closePopups !== false;
+  $("blockAds").checked = config.blockAds !== false;
 
   const list = await send({type: "adapters:list"});
   const host = $("adapters");
@@ -117,7 +119,8 @@ $("save").onclick = async () => {
   }
   await send({type: "settings:set", value: {
     url, apiKey: $("key").value.trim(),
-    automatic: $("automatic").checked, enabled: currentEnabled()
+    automatic: $("automatic").checked, enabled: currentEnabled(),
+    closePopups: $("closePopups").checked, blockAds: $("blockAds").checked
   }});
   say($("result"), "Saved.", "ok");
 };
