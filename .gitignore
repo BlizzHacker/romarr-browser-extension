@@ -9,3 +9,4 @@ __pycache__/
 # in the browser's extension storage -- not in this repository.
 *.local.json
 secrets.json
+_metadata/

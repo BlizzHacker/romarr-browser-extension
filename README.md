@@ -351,6 +351,45 @@ read.
 
 ---
 
+## File hosts and multi-part downloads
+
+Release pages such as NXBrew link a file host's landing page once per part of a
+split archive, often on several hosts. The **Page Files** list in the popup
+recognises 1Fichier (and its alias domains), DataNodes, MultiUp and FileKeeper,
+and groups the parts:
+
+```
+Game.rar  [Select set]
+  DataNodes · 5 parts · missing part 4
+```
+
+* **Landing pages are not files.** A DataNodes or MultiUp URL that ends in
+  `.rar` is still an HTML page, so landing pages are listed as `… page` and
+  **Download Locally** / **Send to Server** act only on real file links.
+  **Open pages** opens the selected landing pages in background tabs (at most
+  30 at a time), where the host's own button, wait and captcha stay with you.
+* **Direct links are downloaded in part order.** FileKeeper's signed
+  `/f/<token>?sig=` links and 1Fichier's download-subdomain links are files.
+  Selecting one set and downloading it puts every part in a folder named after
+  the set unless you type a subfolder.
+* **Split spellings understood:** `name.part3.rar`, `name.7z.003`, old RAR
+  volumes (`name.rar`, `name.r00`, …) and split ZIPs (`name.z01`, …,
+  `name.zip`). A gap is named, so a set with a missing part is visible before
+  anything downloads.
+* **Copy links** puts the selected URLs on the clipboard, one per line, in part
+  order, for Free Download Manager, IDM or JDownloader's paste-links dialog.
+* **Pop-up tabs are closed.** A tab that a file host or release page opens to
+  another site is closed and logged; a tab to the same site or another file host
+  is the download and stays. Tabs opened by **Open pages** are never touched.
+  Settings → *File hosts* turns this off.
+* **Ad networks are blocked** with a bundled `declarativeNetRequest` list
+  (`rules/ad_networks.json`), switchable in the same settings section.
+
+None of this makes a request of its own. Links are read from the page you
+opened, landing pages open only when you press the button, and the extension
+still sends no spoofed `User-Agent` or `Referer` — `tests/mirrors.test.mjs`
+checks that.
+
 ## What it will not do
 
 These are enforced by `tests/run.mjs`, which fails the build. They are

@@ -443,7 +443,9 @@
       const ext = _extOf(filename, resolved);
       const isExtMatch = _DOWNLOAD_EXTS.has(ext);
       const isHintMatch = _DOWNLOAD_URL_HINTS.some((re) => re.test(resolved));
-      if (!hasAttr && !isExtMatch && !isHintMatch) continue;
+      const mirrors = root.RomarrMirrors;
+      const known = mirrors ? mirrors.fileHost(resolved) : null;
+      if (!hasAttr && !isExtMatch && !isHintMatch && !known) continue;
       if (!visible(el)) continue;
 
       seen.add(resolved);
@@ -453,13 +455,16 @@
         const m = clean(row.textContent).match(_SIZE_HINT);
         if (m) sizeText = m[1];
       }
-      out.push({
+      const entry = {
         url: resolved,
         filename,
         ext: ext || "file",
         label: text || filename,
         size_text: sizeText
-      });
+      };
+      // File-host landing pages and split-archive parts: which host, whether
+      // the URL is the file or only its landing page, and which part.
+      out.push(mirrors ? Object.assign(entry, mirrors.describe(resolved, filename, text)) : entry);
     }
     return out;
   }
